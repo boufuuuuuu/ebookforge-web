@@ -81,10 +81,19 @@ function pack(ctx,W,H){
  const p=(y*W+x)*4;if(pix[p]*.299+pix[p+1]*.587+pix[p+2]*.114<128)data[y*stride+(x>>3)]&=~(128>>(x&7));}
  return data;
 }
-function decodePage(b,W,H,canvas){
- canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H),stride=Math.ceil(W/8);
- for(let y=0;y<H;y++)for(let x=0;x<W;x++){const v=(b[y*stride+(x>>3)]&(128>>(x&7)))?255:0,p=(y*W+x)*4;
- img.data[p]=img.data[p+1]=img.data[p+2]=v;img.data[p+3]=255;}ctx.putImageData(img,0,0);
+function decodePage(b,W,H,canvas,xtch=false){
+ canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H);
+ const stride=Math.ceil(W/8),colStride=Math.ceil(H/8),planeSize=W*colStride;
+ if(xtch && b.length!==planeSize*2)throw Error('XTCHページの長さが不正です');
+ if(!xtch && b.length!==stride*H)throw Error('XTCページの長さが不正です');
+ const palette=[255,96,160,0];
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+   let lum;
+   if(xtch){const offset=(W-1-x)*colStride+(y>>3),bit=128>>(y&7);
+     const idx=((b[offset]&bit)?2:0)|((b[planeSize+offset]&bit)?1:0);lum=palette[idx];
+   }else{lum=(b[y*stride+(x>>3)]&(128>>(x&7)))?255:0;}
+   const p=(y*W+x)*4;img.data[p]=img.data[p+1]=img.data[p+2]=lum;img.data[p+3]=255;
+ }ctx.putImageData(img,0,0);
 }
 async function renderBook(book,opt={},progress=()=>{}){
  const W=528,H=792,v=opt.vertical!==false,fs=Number(opt.font)||22,m=Number(opt.margin)||30,spacing=Number(opt.spacing)||1.45;
@@ -125,12 +134,14 @@ async function renderBook(book,opt={},progress=()=>{}){
  }
  return {pages,chapters,width:W,height:H};
 }
-function buildXtcWithChapters(pages,chapters,title,author,vertical=true){
- const W=528,H=792,N=pages.length,HEAD=56,META=256,CH=96,ENTRY=16,PH=22,PS=W/8*H;
+function buildXtcWithChapters(pages,chapters,title,author,vertical=true,format='xtc'){
+ const W=528,H=792,N=pages.length,HEAD=56,META=256,CH=96,ENTRY=16,PH=22;
+ if(!['xtc','xtch'].includes(format))throw Error('出力形式が不正です');
+ const color=format==='xtch',PS=color?W*Math.ceil(H/8)*2:Math.ceil(W/8)*H;
  if(!N||N>65535||pages.some(p=>p.length!==PS))throw Error('ページデータが不正です');
  const ch=chapters.filter(c=>c.page>=0&&c.page<N),chOff=HEAD+META,tbl=chOff+ch.length*CH,dat=tbl+N*ENTRY,per=PH+PS,total=dat+N*per;
  if(total>110*1048576)throw Error('出力は110MBまでです');
- const b=new Uint8Array(total),dv=new DataView(b.buffer);b.set([88,84,67,0]);b[4]=1;dv.setUint16(6,N,true);
+ const b=new Uint8Array(total),dv=new DataView(b.buffer);b.set(color?[88,84,67,72]:[88,84,67,0]);b[4]=1;dv.setUint16(6,N,true);
  b[8]=vertical?1:0;b[9]=1;b[11]=ch.length?1:0;dv.setUint32(12,1,true);
  dv.setBigUint64(16,BigInt(HEAD),true);dv.setBigUint64(24,BigInt(tbl),true);dv.setBigUint64(32,BigInt(dat),true);
  if(ch.length)dv.setUint32(48,chOff,true);
@@ -140,7 +151,7 @@ function buildXtcWithChapters(pages,chapters,title,author,vertical=true){
  b.set(utf(c.title,80),o);dv.setUint16(o+80,s,true);dv.setUint16(o+82,Math.max(s,e),true);});
  for(let i=0;i<N;i++){const t=tbl+i*ENTRY,o=dat+i*per;
  dv.setBigUint64(t,BigInt(o),true);dv.setUint32(t+8,per,true);dv.setUint16(t+12,W,true);dv.setUint16(t+14,H,true);
- b.set([88,84,71,0],o);dv.setUint16(o+4,W,true);dv.setUint16(o+6,H,true);dv.setUint32(o+10,PS,true);
+ b.set(color?[88,84,72,0]:[88,84,71,0],o);dv.setUint16(o+4,W,true);dv.setUint16(o+6,H,true);dv.setUint32(o+10,PS,true);
  b.set(md5(pages[i]).slice(0,8),o+14);b.set(pages[i],o+PH);}return b;
 }
 g.EbookForgeBook={fromText,fromEpub,renderBook,buildXtcWithChapters,decodePage,safeName:filename,pack};

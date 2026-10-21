@@ -98,7 +98,21 @@
         throw new Error('このブラウザはEPUB解凍に対応していません。Safariを更新してください。');
       try {
         const stream = new Blob([entry.compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+        const reader = stream.getReader(), chunks = [];
+        let total = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > entry.size || total > MAX_FILE_BYTES) {
+            await reader.cancel();
+            throw new Error('ZIP展開量が申告サイズを超えています。');
+          }
+          chunks.push(value);
+        }
+        bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
       } catch (err) {
         throw new Error(`圧縮データを展開できません: ${entry.name}`);
       }
