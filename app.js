@@ -75,3 +75,46 @@ $('convert').addEventListener('click',async()=>{
  status.textContent=`${pages.length}ページのXTCを作成しました（${(bytes.length/1024/1024).toFixed(1)} MB）。端末へは手動で転送してください。`;
  }catch(e){status.textContent='エラー: '+e.message;}finally{btn.disabled=false;}
 });
+
+
+// EPUB optimizer UI — locally processed; no network calls.
+function applyEpubPreset(name) {
+ const presets = {
+  'crosspoint': ['preserve', 'none', 'none'],
+  'stock-old': ['parentheses', 'old', 'old'],
+  'stock-new': ['parentheses', 'new', 'new']
+ };
+ const [ruby, indent, breaks] = presets[name] || presets.crosspoint;
+ $('epub-ruby').value = ruby; $('epub-indent').value = indent; $('epub-breaks').value = breaks;
+}
+$('epub-preset').addEventListener('change', e => applyEpubPreset(e.target.value));
+applyEpubPreset($('epub-preset').value);
+$('epub-optimize').addEventListener('click', async () => {
+ const status = $('epub-status'), button = $('epub-optimize'), f = $('epub-file').files[0];
+ if (!f) { status.textContent = 'EPUBファイルを選んでください。'; return; }
+ if (f.size > 70 * 1024 * 1024) { status.textContent = '70MB以下のEPUBを選んでください。'; return; }
+ button.disabled = true;
+ try {
+  status.textContent = 'EPUBを読み込んでいます…';
+  const original = new Uint8Array(await f.arrayBuffer());
+  const opts = {
+   ruby: $('epub-ruby').value === 'parentheses',
+   indent: $('epub-indent').value,
+   breaks: $('epub-breaks').value
+  };
+  const result = await EbookForgeEpub.optimize(original, opts,
+   (done, total) => { status.textContent = `変換中… ${done} / ${total} ファイル`; });
+  const blob = new Blob([result.bytes], {type:'application/epub+zip'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = f.name.replace(/\.epub$/i,'').replace(/[\\/:*?"<>|]/g,'_') + '_ebookforge.epub';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  const c = result.counts;
+  status.textContent = `完了：XHTML ${c.files}件、ルビ ${c.ruby}件、字下げ ${c.indent}件、改行 ${c.breaks}件。` +
+   (c.skippedBreaks ? ` 安全上変更しなかった改行 ${c.skippedBreaks}件。` : '') +
+   `\n出力 ${(result.bytes.length/1024/1024).toFixed(2)} MB。元ファイルは変更していません。`;
+ } catch(err) { status.textContent = 'EPUB補正エラー：' + err.message; }
+ finally { button.disabled = false; }
+});
