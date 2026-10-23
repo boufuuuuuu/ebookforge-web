@@ -1,0 +1,123 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#182333"><link rel="manifest" href="manifest.webmanifest"><title>EbookForge Web</title><style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#182333;background:#f4f6f8}body{max-width:760px;margin:auto;padding:20px}h1{font-size:1.7rem}section{background:white;border-radius:14px;padding:18px;margin:16px 0;box-shadow:0 2px 12px #0001}label{display:block;margin:12px 0 5px;font-weight:600}input,textarea,select,button{box-sizing:border-box;width:100%;font:inherit;padding:11px;border:1px solid #aeb6c0;border-radius:8px}textarea{min-height:200px}button{background:#174c88;color:white;font-weight:700;cursor:pointer;margin-top:14px}button:disabled{opacity:.5}.hint{color:#59677a;font-size:.9rem}.status{white-space:pre-wrap}a{color:#174c88}summary{cursor:pointer;font-weight:700;padding:10px 0}progress{width:100%}small{font-size:.65em;color:#5d6880}
+.cardnote{background:#edf4fb;padding:12px;border-left:3px solid #174c88;border-radius:6px}
+.toprow{display:grid;grid-template-columns:1fr 1fr;gap:12px}.btnline{display:flex;gap:9px}.btnline button{flex:1}
+.toc{max-height:310px;overflow:auto;border:1px solid #ddd;border-radius:8px}.toc label{display:flex;gap:12px;font-weight:400;border-bottom:1px solid #eee;padding:12px;margin:0}.toc input{width:18px;height:18px;flex:none}
+#preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}[hidden]{display:none!important}
+@media(max-width:540px){.toprow{grid-template-columns:1fr}.btnline{flex-wrap:wrap}}.search-result{padding:12px;border-bottom:1px solid #ddd}.manga-sites{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:9px}.manga-sites a{display:block;padding:10px;border:1px solid #ccd6df;border-radius:8px;text-decoration:none}.manga-sites small{display:block}.manga-preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}.search-result a{font-weight:700}.smallbtn{font-size:.85rem;padding:7px}
+</style></head><body><h1>EbookForge Web <small>v0.5.3 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
+
+<section><h2>① X3の出力モード</h2>
+<label for="profile">利用するファームウェア</label>
+<select id="profile"><option value="stock">X3 純正向け</option><option value="crosspoint">X3 CrossPoint向け</option></select>
+<p id="profile-info" class="cardnote">純正向け：XTCで表示を固定します。</p></section>
+<section><h2>② なろう作品を検索</h2>
+<label for="narou-search">作品名・著者・キーワード</label><input id="narou-search" placeholder="例：ファンタジー">
+<button id="narou-search-btn">公式APIで作品情報を検索</button>
+<div id="narou-results" role="status"></div>
+<p class="hint">検索結果から公式サイトへ移動します。本文の自動取得は未対応。青空文庫は下の公式リンクで検索できます。</p>
+</section>
+<section><h2>青空文庫を作品検索</h2>
+<p><a href="https://www.aozora.gr.jp/index_pages/list_person_all_extended_utf8.zip" target="_blank" rel="noopener">青空文庫の公式UTF-8作品一覧ZIPを保存 ↗</a></p>
+<label for="aozora-file">ダウンロードした作品一覧ZIPまたはCSV</label>
+<input id="aozora-file" type="file" accept=".zip,.csv,text/csv">
+<button id="aozora-load">作品一覧を読み込む</button>
+<label for="aozora-search">作品名・作者名</label>
+<input id="aozora-search" placeholder="例：夏目漱石">
+<button id="aozora-search-btn">索引から検索</button><div id="aozora-results" role="status"></div>
+<p class="hint">著作権フラグが「なし」の作品を表示します。検索結果から青空文庫の公式図書カードへ移動できます。本文の自動取得は未対応です。</p>
+</section><section><h2>③ 本を読み込む</h2>
+<label for="book-file">TXT・Markdown・EPUB・画像</label>
+<input id="book-file" type="file" multiple accept=".txt,.md,.markdown,.epub,.png,.jpg,.jpeg,.webp,text/plain,application/epub+zip,image/*">
+<p class="hint">画像はPNG/JPG/WEBP。PDF・RAR・CBRは下の「⑤ 漫画・写真・PDF・RAR/CBR」で変換できます。</p>
+<label for="book-title">タイトル</label><input id="book-title" value="電子書籍">
+<label for="book-author">著者</label><input id="book-author" placeholder="任意">
+<details><summary>本文を直接貼り付ける（TXT / Markdown）</summary>
+<textarea id="book-input" placeholder="# 第一章&#10;本文……"></textarea>
+<button id="book-from-text">貼り付け本文を読み込む</button></details>
+<button id="book-load">選択したファイルを読み込む</button>
+<p id="book-load-status" class="status" role="status"></p><button id="book-save-epub" hidden>EPUBをそのまま保存（CrossPoint用）</button>
+<div id="book-toc-box" hidden><h3>章を選択</h3>
+<div class="btnline"><button id="toc-all">すべて選択</button><button id="toc-none">すべて解除</button></div>
+<div id="book-toc" class="toc"></div><p id="toc-summary"></p></div></section>
+<section><h2>④ 日本語組版・XTC変換</h2>
+<div class="toprow">
+<div><label for="direction">方向</label><select id="direction"><option value="vertical">縦書き</option><option value="horizontal">横書き</option></select></div>
+<div><label for="book-size">文字サイズ</label><select id="book-size"><option>18</option><option selected>22</option><option>26</option><option>30</option></select></div>
+<div><label for="book-margin">余白</label><select id="book-margin"><option value="20">狭い</option><option value="30" selected>標準</option><option value="45">広い</option></select></div>
+<div><label for="book-spacing">行間</label><select id="book-spacing"><option value="1.25">狭い</option><option value="1.45" selected>標準</option><option value="1.75">広い</option></select></div>
+</div>
+<button id="book-build">ページを生成してプレビュー</button>
+<p id="book-status" class="status" role="status"></p>
+<div id="preview-box" hidden><h3>X3実機サイズ（528×792）</h3>
+<canvas id="preview" width="528" height="792"></canvas>
+<div class="btnline"><button id="preview-prev">← 前ページ</button><button id="preview-next">次ページ →</button></div>
+<div class="btnline"><button id="preview-back">ジャンプ前に戻る</button><button id="preview-resume">読書位置へ戻る</button></div>
+<label for="preview-chapters">目次からジャンプ</label><select id="preview-chapters"></select>
+<p id="preview-count"></p>
+<button id="book-export">章情報付きXTCを保存</button></div></section>
+<section id="manga-area"><h2>⑤ 漫画・写真・PDF・RAR/CBR → X3用XTC / XTCH</h2>
+<p class="cardnote">iPhoneに保存した画像（JPG/PNG/WebP）、ZIP/CBZ、PDF、RAR/CBRを、<strong>X3の528×792</strong>に合わせて端末内で変換します。ZIP/RAR内のファイル名順、PDFは元のページ順に変換します。Web上の漫画画像を自動収集する機能ではありません。</p>
+<div class="manga-sites">
+<a href="https://www.mangaz.com/" target="_blank" rel="noopener">マンガ図書館Z<small>公式の閲覧・購入ページへ</small></a>
+<a href="https://www.mangazenkan.com/" target="_blank" rel="noopener">漫画全巻ドットコム<small>公式サイトで作品検索</small></a>
+<a href="https://comic.k-manga.jp/" target="_blank" rel="noopener">まんが王国<small>公式サイトで作品検索</small></a>
+<a href="https://takecomic.jp/" target="_blank" rel="noopener">竹コミ！<small>公式の作品・話数ページへ</small></a>
+<a href="https://shonenjumpplus.com/" target="_blank" rel="noopener">少年ジャンプ＋<small>公式の作品・話数ページへ</small></a>
+</div>
+<p class="hint">上記は公式ページへのリンクです。サイト内検索や画像の一括取得は行いません。著作権や各サイトの利用条件に従い、保存・変換が認められたファイルを使用してください。</p>
+<label for="manga-files">画像を複数選択／ZIP・CBZ・PDF・RAR・CBRファイル</label>
+<input id="manga-files" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.cbz,.zip,.pdf,.rar,.cbr,image/jpeg,image/png,image/webp,application/zip,application/pdf,application/vnd.rar,application/x-rar-compressed">
+<label for="manga-title">書名</label><input id="manga-title" value="漫画・写真集">
+<div class="toprow">
+<div><label for="manga-format">出力形式</label><select id="manga-format"><option value="xtc">XTC・白黒2階調（推奨）</option><option value="xtch">XTCH・4階調（X3ではメモリエラー注意）</option></select></div>
+<div><label for="manga-reading">読む向き</label><select id="manga-reading"><option value="rtl">右開き・右から左</option><option value="ltr">左開き・左から右</option></select></div>
+<div><label for="manga-spread">見開き画像</label><select id="manga-spread"><option value="auto">横長画像を自動で左右分割</option><option value="none">分割しない</option><option value="always">すべて左右に分割</option></select></div>
+<div><label for="manga-long">縦長画像</label><select id="manga-long"><option value="auto">自動で上下分割</option><option value="none">分割しない</option></select></div>
+<div><label for="manga-trim">余白調整</label><select id="manga-trim"><option value="on">白い余白を自動除去</option><option value="off">画像全体を保持</option></select></div>
+<div><label for="manga-contrast">コントラスト</label><select id="manga-contrast"><option value="1">標準</option><option value="1.35" selected>やや強い</option><option value="1.7">強い</option></select></div>
+<div><label for="manga-dither">網点・階調補正</label><select id="manga-dither"><option value="off">なし</option><option value="on">順序ディザ</option></select></div>
+<div><label for="manga-volume">分冊して保存</label><select id="manga-volume"><option value="0">分割しない</option><option value="50">50ページごと</option><option value="100">100ページごと</option><option value="150">150ページごと</option></select></div>
+</div>
+<p id="manga-mem-note" class="hint"></p>
+<div class="btnline"><button id="manga-build">漫画画像を変換してプレビュー</button><button id="manga-cancel" hidden>中止</button></div>
+<p id="manga-status" class="status" role="status"></p>
+<div id="manga-preview-box" hidden><h3>変換後のX3表示プレビュー</h3>
+<canvas id="manga-preview" class="manga-preview" width="528" height="792"></canvas>
+<div class="btnline"><button id="manga-prev">← 前ページ</button><button id="manga-next">次ページ →</button></div>
+<div class="btnline"><button id="manga-back">ジャンプ前に戻る</button><button id="manga-resume">読書位置へ戻る</button></div>
+<label for="manga-chapters">目次からジャンプ</label><select id="manga-chapters"></select>
+<p id="manga-page-count"></p>
+<button id="manga-export">X3用ファイルを保存</button>
+<div id="manga-volumes" class="btnline"></div>
+</div>
+<p class="hint">ZIP/CBZ最大70MB、PDF最大35MB・120ページ（余白は文書全体で共通に調整・縦長分割なし）、RAR/CBR最大40MB（画像125MBまで）。画像180枚・出力400ページまで。画像処理の結果は元ファイルを変更しません。HEIC写真・パスワード付きPDF/RAR・DRMコンテンツには未対応です。PDFとRARは初回に外部ライブラリを読み込むためネット接続が必要です。iPhone/X3実機での表示品質は未検証です。</p>
+</section>
+<section><h2>最近の変換履歴</h2><div id="conversion-history" class="hint">まだありません</div></section><section><h2>⑥ X3へ転送</h2>
+<p id="transfer-guide" class="cardnote">純正ファーム：保存したXTCをX3の対応する転送方法で取り込んでください。</p>
+<a href="http://crosspoint.local/" target="_blank" rel="noopener">CrossPointの転送画面（端末の転送モード時）↗</a>
+<p class="hint">CrossPointではX3のFile Transferを起動し、端末のQRコードから転送画面を開いて保存済みファイルを選択します。GitHub Pagesからの自動送信は未実装です。</p></section>
+<details><summary>前バージョンのEPUB補正・従来TXT変換・作品案内を開く</summary>
+<section><h2>作品を探す</h2><p><a href="https://www.aozora.gr.jp/" target="_blank" rel="noopener">青空文庫で探す ↗</a>　<a href="https://syosetu.com/" target="_blank" rel="noopener">小説家になろうで探す ↗</a></p><p class="hint">現段階では外部サイトで検索し、利用条件を確認してTXTを保存するか本文を貼り付けてください。サイト内検索・自動取得は未実装です。</p></section>
+<section><h2>EPUBを日本語向けに補正 <small>新機能</small></h2>
+<p class="hint">ルビ・字下げ・改行を端末のファームウェアに合わせて調整し、EPUB形式のまま保存します。スマホ内で処理し、書籍ファイルは外部送信しません。</p>
+<label for="epub-file">EPUBファイル</label>
+<input id="epub-file" type="file" accept=".epub,application/epub+zip">
+<label for="epub-preset">端末・ファームウェアの設定</label>
+<select id="epub-preset">
+<option value="crosspoint">CrossPoint / 一般EPUB（元の構造を維持）</option>
+<option value="stock-new">純正 X4 新ファームウェア V6.2.4以降（参考設定）</option>
+<option value="stock-old">純正 X4 旧ファームウェア V6.2.4未満（参考設定）</option>
+</select>
+<p class="hint">上記の字下げ・改行方式は公開元のX4向け仕様です。X3では実機確認が必要です。</p>
+<details><summary>詳細オプション（個別に変更可能）</summary>
+<label for="epub-ruby">ルビ</label><select id="epub-ruby"><option value="preserve">ルビを保持</option><option value="parentheses">漢字（かんじ）に変換</option></select>
+<label for="epub-indent">段落字下げ</label><select id="epub-indent"><option value="none">変更しない</option><option value="old">旧方式：p先頭に空spanを追加</option><option value="new">新方式：隣接する単純なpを結合</option></select>
+<label for="epub-breaks">pタグ外のbr改行</label><select id="epub-breaks"><option value="none">変更しない</option><option value="old">旧方式：半角空白のpに置換</option><option value="new">新方式：全角空白＋brのpに置換</option></select>
+</details>
+<button id="epub-optimize">EPUBを補正して保存</button>
+<p id="epub-status" class="status" role="status"></p>
+<p class="hint">DRMの解除は行いません。原本は変更せず別ファイルを保存します。著作権・利用条件に従って利用してください。</p>
+</section>
+<section><h2>本文を入力</h2><label for="file">UTF-8テキストファイル</label><input id="file" type="file" accept=".txt,text/plain"><label for="title">タイトル</label><input id="title" value="電子書籍"><label for="author">著者</label><input id="author" placeholder="任意"><label for="body">本文</label><textarea id="body" placeholder="ここに本文を貼り付けることもできます"></textarea></section>
+<section><h2>変換</h2><label for="device">端末</label><select id="device"><option value="X3" selected>XTEINK X3（528×792）</option><option value="X4">XTEINK X4（480×800）</option></select><label for="size">文字サイズ</label><select id="size"><option value="22">22 px</option><option value="18">18 px</option><option value="26">26 px</option></select><button id="convert">XTCを作成して保存</button><p id="status" class="status" role="status"></p><p class="hint">横書き・1bit XTCの初期実装です。ルビ、縦書き、XTCH、端末への直接Wi-Fi送信は未対応。生成ファイルの実機動作は未検証です。</p></section></details><script src="epub.js"></script><script src="app.js"></script><script src="book.js"></script><script src="catalog.js"></script><script src="studio.js"></script><script src="document-input.js"></script><script src="manga.js"></script><script src="manga-ui.js"></script></body></html>
