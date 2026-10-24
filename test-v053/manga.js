@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.5.5 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.5.6 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -134,7 +134,29 @@ function inkProfile(image,r,axis,a0,a1){
  }
  return{values,scale:s};
 }
-function encodeGray(pixels,width,height,format='xtc',contrast=1,dither=false){
+// v0.5.6: 文字向けの適応二値化（Bradley 法）。各画素を周囲 win×win の平均明るさと比べ、
+// 平均より t 以上暗ければ「文字」とする。灰色の細い文字も黒く残り、薄い灰色の背景は白になる。
+// 返り値: Uint8Array(width*height)  1=文字（黒）
+function textMask(pixels,width,height,win=Math.round(width/14),t=0.16){
+ const gray=new Float32Array(width*height);
+ for(let i=0;i<width*height;i++)gray[i]=pixels[i*4]*.299+pixels[i*4+1]*.587+pixels[i*4+2]*.114;
+ const W1=width+1,sum=new Float64Array(W1*(height+1));
+ for(let y=0;y<height;y++){let row=0;for(let x=0;x<width;x++){row+=gray[y*width+x];sum[(y+1)*W1+x+1]=sum[y*W1+x+1]+row;}}
+ const half=Math.max(4,win>>1),mask=new Uint8Array(width*height);
+ for(let y=0;y<height;y++){
+  const y0=Math.max(0,y-half),y1=Math.min(height,y+half+1);
+  for(let x=0;x<width;x++){
+   const g=gray[y*width+x];
+   if(g>235)continue;                                  // 紙の白はそのまま白
+   const x0=Math.max(0,x-half),x1=Math.min(width,x+half+1);
+   const area=(x1-x0)*(y1-y0);
+   const mean=(sum[y1*W1+x1]-sum[y0*W1+x1]-sum[y1*W1+x0]+sum[y0*W1+x0])/area;
+   if(g<=mean*(1-t)||g<64)mask[y*width+x]=1;            // 周囲より暗い／十分に黒い
+  }
+ }
+ return mask;
+}
+function encodeGray(pixels,width,height,format='xtc',contrast=1,dither=false,sharpText=false){
  if(!['xtc','xtch'].includes(format))throw Error('形式を選択してください');
  if(pixels.length!==width*height*4)throw Error('画像データのサイズが違います');
  const xtch=format==='xtch';
@@ -142,8 +164,27 @@ function encodeGray(pixels,width,height,format='xtc',contrast=1,dither=false){
  const out=new Uint8Array(xtch?2*planeSize:stride*height);
  if(!xtch)out.fill(255);
  const bayer=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+ // 文字くっきりは「文字のページ」だけに適用：紙の白（明るさ>235）が描画範囲の半分以上あるページ。
+ // 写真・漫画のページは濃淡が輪郭だけになるのを避けるため、従来の変換のまま。
+ let mask=null;
+ if(sharpText){
+  let paper=0;for(let i=0;i<width*height;i++){const g=pixels[i*4]*.299+pixels[i*4+1]*.587+pixels[i*4+2]*.114;if(g>235)paper++;}
+  if(paper>=width*height*0.5)mask=textMask(pixels,width,height);
+ }
  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
   const pos=(y*width+x)*4;
+  if(mask){
+   // 文字くっきり：文字は黒、それ以外は XTC=白 / XTCH=明るい灰色まで残す（図の濃淡用）
+   const ink=mask[y*width+x]===1;
+   if(xtch){
+    const g0=pixels[pos]*.299+pixels[pos+1]*.587+pixels[pos+2]*.114;
+    const idx=ink?3:g0>=200?0:g0>=120?2:1;
+    const off=(width-1-x)*colStride+(y>>3),bit=128>>(y&7);
+    if(idx&2)out[off]|=bit;
+    if(idx&1)out[planeSize+off]|=bit;
+   }else if(ink)out[y*stride+(x>>3)]&=~(128>>(x&7));
+   continue;
+  }
   // Canvas compositing is done on opaque white.
   let gray=pixels[pos]*.299+pixels[pos+1]*.587+pixels[pos+2]*.114;
   gray=Math.max(0,Math.min(255,(gray-128)*contrast+128));
@@ -299,19 +340,29 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
     if(cancel())throw Error('変換を中止しました');
     if(pages.length>=MAX_PAGES)throw Error(`出力ページが${MAX_PAGES}枚を超えています`);
     ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+    // PDF は最終倍率で直接描いた画像を 1:1 で配置（縮小による文字の欠けを防ぐ）
+    let srcImg=image,sr=r,direct=null;
+    if(src.renderRegion&&opt.pdfDirect!==false){
+     const k=gscale||(r.rotate?Math.min(W/r.h,H/r.w):Math.min(W/r.w,H/r.h));
+     direct=await src.renderRegion(r,k);
+     srcImg=direct;sr={x:0,y:0,w:direct.width,h:direct.height,rotate:r.rotate,group:r.group};
+    }
+    try{
     if(r.rotate){
      // 端末を時計回りに90°倒して読む。内容の上端を端末の左端に揃える
-     const scale=gscale||Math.min(W/r.h,H/r.w),w=r.w*scale,h=r.h*scale;
+     const scale=direct?1:(gscale||Math.min(W/r.h,H/r.w)),w=sr.w*scale,h=sr.h*scale;
      const ox=r.group?h/2:W/2;
-     ctx.save();ctx.translate(ox,H/2);ctx.rotate(-Math.PI/2);
-     ctx.drawImage(image,r.x,r.y,r.w,r.h,-w/2,-h/2,w,h);ctx.restore();
+     ctx.save();ctx.translate(Math.round(ox),Math.round(H/2));ctx.rotate(-Math.PI/2);
+     ctx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round(-w/2),Math.round(-h/2),w,h);ctx.restore();
     }else{
-     const scale=gscale||Math.min(W/r.w,H/r.h),w=r.w*scale,h=r.h*scale;
+     const scale=direct?1:(gscale||Math.min(W/r.w,H/r.h)),w=sr.w*scale,h=sr.h*scale;
      const oy=r.group?0:(H-h)/2;                    // 分割ページは上端に揃える
-     ctx.drawImage(image,r.x,r.y,r.w,r.h,(W-w)/2,oy,w,h);
+     ctx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round((W-w)/2),Math.round(oy),w,h);
     }
+    }finally{if(direct){direct.width=0;direct.height=0;}}
     const data=ctx.getImageData(0,0,W,H).data;
-    pages.push(encodeGray(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither)));
+    const sharp=src.kind==='pdf'&&opt.sharpText!=='off';
+    pages.push(encodeGray(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither),sharp));
    }
   }finally{release();}
   progress(i+1,sources.length,pages.length);
@@ -334,5 +385,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,snapCut,planPdfSplit,PAGE_W:W,PAGE_H:H};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,PAGE_W:W,PAGE_H:H};
 })(typeof window!=='undefined'?window:globalThis);

@@ -1,4 +1,4 @@
-/* EbookForge Web 0.5.3: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.5.6: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -75,6 +75,12 @@ function canvasHasInk(ctx,w,h){
  for(let k=0;k<data.length;k+=4)if(data[k]<235||data[k+1]<235||data[k+2]<235)return true;
  return false;
 }
+function analysisScale(page){
+ const base=page.getViewport({scale:1});
+ const scale=Math.min(2,1600/Math.max(base.width,base.height),Math.sqrt(3.2e6/(base.width*base.height)));
+ if(!Number.isFinite(scale)||scale<=0)err('PDFのページサイズが不正です');
+ return scale;
+}
 async function fromPDF(file){
  if(file.size>MAX_PDF_SIZE)err('PDFは35MB以内にしてください');
  const lib=await loadPDF();
@@ -93,15 +99,29 @@ async function fromPDF(file){
    archive:file.name.replace(/\.pdf$/i,''),
    kind:'pdf',uniformGroup:'pdf:'+file.name+':'+file.size,
    entryName:`${String(i+1).padStart(5,'0')}.png`,
+   // v0.5.6: 解析用画像（open）の座標 r を、最終解像度で PDF から直接描画する。
+   // 大きく描いた画像をブラウザで縮小すると細い文字が欠けるため、倍率 k をかけた大きさで
+   // ベクターから描き直す（文字の輪郭がその解像度で最も鮮明になる）。
+   renderRegion:async(r,k)=>{
+    if(closed)err('PDFは既に閉じられました');
+    const page=await doc.getPage(i+1);
+    const c=document.createElement('canvas');
+    try{
+     const s0=analysisScale(page),viewport=page.getViewport({scale:s0*k});
+     c.width=Math.max(1,Math.round(r.w*k));c.height=Math.max(1,Math.round(r.h*k));
+     const cx=c.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,c.width,c.height);
+     await page.render({canvasContext:cx,viewport,background:'rgb(255,255,255)',
+       transform:[1,0,0,1,-r.x*k,-r.y*k]}).promise;
+     return c;
+    }catch(e){c.width=0;c.height=0;throw e;}
+    finally{if(page.cleanup)page.cleanup();}
+   },
    open:async()=>{
     if(closed)err('PDFは既に閉じられました');
     const page=await doc.getPage(i+1);
     let canvas;
     try{
-     const base=page.getViewport({scale:1});
-     const scale=Math.min(2,1600/Math.max(base.width,base.height),
-       Math.sqrt(3.2e6/(base.width*base.height)));
-     if(!Number.isFinite(scale)||scale<=0)err('PDFのページサイズが不正です');
+     const scale=analysisScale(page);
      const viewport=page.getViewport({scale});
      canvas=document.createElement('canvas');
      canvas.width=Math.max(1,Math.round(viewport.width));
