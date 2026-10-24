@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.5.8 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.6.0 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -234,6 +234,41 @@ function encodeGray2x(p2,width,height,format='xtc',contrast=1,dither=false,pool=
  out.sharp=true;
  return out;
 }
+// v0.6.0: 図（写真・画面キャプチャ）用の白黒化。濃淡は順序ディザで残し、図の中の文字は適応二値化で黒く保つ
+function encodeFigure(pixels,width,height){
+ // 暗い文字（周りより暗い）→黒、明るい文字（色付きボタン上の白文字など、周りより明るい）→白、
+ // それ以外の面は順序ディザで濃淡を残す
+ const mask=textMask(pixels,width,height),light=lightMask(pixels,width,height);
+ const stride=Math.ceil(width/8),out=new Uint8Array(stride*height).fill(255);
+ const bayer=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const i=y*width+x,p=i*4;
+  if(light[i])continue;
+  let g=pixels[p]*.299+pixels[p+1]*.587+pixels[p+2]*.114;
+  // 濃い色（ボタン等）は黒で塗りつぶし、中間の明るさだけ網点に（濃い面の点々ノイズを防ぐ）
+  g=g>=240?255:g<110?0:g+(bayer[(y&3)*4+(x&3)]-7.5)*7;
+  if(mask[i]||g<128)out[y*stride+(x>>3)]&=~(128>>(x&7));
+ }
+ return out;
+}
+// 周囲の平均より十分に明るい画素（暗い面の上の白い文字）。白い紙の上では反応しない（周囲も明るいため）
+function lightMask(pixels,width,height,win=Math.round(width/14),t=0.25){
+ const gray=new Float32Array(width*height);
+ for(let i=0;i<width*height;i++)gray[i]=pixels[i*4]*.299+pixels[i*4+1]*.587+pixels[i*4+2]*.114;
+ const W1=width+1,sum=new Float64Array(W1*(height+1));
+ for(let y=0;y<height;y++){let row=0;for(let x=0;x<width;x++){row+=gray[y*width+x];sum[(y+1)*W1+x+1]=sum[y*W1+x+1]+row;}}
+ const half=Math.max(4,win>>1),m=new Uint8Array(width*height);
+ for(let y=0;y<height;y++){
+  const y0=Math.max(0,y-half),y1=Math.min(height,y+half+1);
+  for(let x=0;x<width;x++){
+   const g=gray[y*width+x];if(g<150)continue;
+   const x0=Math.max(0,x-half),x1=Math.min(width,x+half+1),area=(x1-x0)*(y1-y0);
+   const mean=(sum[y1*W1+x1]-sum[y0*W1+x1]-sum[y1*W1+x0]+sum[y0*W1+x0])/area;
+   if(mean<200&&g>=mean*(1+t))m[y*width+x]=1;
+  }
+ }
+ return m;
+}
 // 端末が1ページ表示ごとに確保する連続メモリ（CrossPoint XtcReaderActivity::renderPage の malloc と同じ式）
 function pageBufferBytes(format,width=W,height=H){
  return format==='xtch'?width*Math.ceil(height/8)*2:Math.ceil(width/8)*height;
@@ -412,7 +447,7 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
   await sleep();
  }
  if(canvas2){canvas2.width=0;canvas2.height=0;}
- return{width:W,height:H,pages,chapters,format,stats,engine:'0.5.8'};
+ return{width:W,height:H,pages,chapters,format,stats,engine:'0.6.0'};
 }
 // 分冊: pages を size ページずつに分け、各巻の章リストを付け直す（巻頭には直前の章を引き継ぐ）
 function splitVolumes(pages,chapters,size){
@@ -429,5 +464,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,PAGE_W:W,PAGE_H:H,ENGINE:'0.5.8'};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,encodeFigure,PAGE_W:W,PAGE_H:H,ENGINE:'0.6.0'};
 })(typeof window!=='undefined'?window:globalThis);

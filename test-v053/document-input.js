@@ -1,4 +1,4 @@
-/* EbookForge Web 0.5.8: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.6.0: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -272,9 +272,21 @@ async function fromRAR(file){
 // v0.5.7: PDF の文字情報を取り出して、本文テキスト（章＝大きい文字の見出し）に組み直す。
 // 文字の並びは PDF に書かれた順（作成ソフトの論理順。HTML→PDF なら記述順）を使う。
 // 行の区切り：PDF.js の改行フラグ、または行位置（横書きは y、縦書きは x）が文字の大きさの半分以上変わったとき。
+// v0.5.9: 取り出した文字の整形
+// - 部首・互換用の漢字（⽇ U+2F47 など。PDFの文字情報でよく混入する）を通常の漢字へ（NFKC は該当文字だけに適用）
+// - 字間を広げて配置された文字の間の空白を詰める（日本語どうし／1文字ずつ空白で区切られた英字）
+const CJK='\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef';
+function cleanText(s){
+ s=s.replace(/[\u2e80-\u2fdf\uf900-\ufaff]/g,c=>c.normalize('NFKC'));
+ s=s.replace(new RegExp(`([${CJK}])[ \\u00a0]+(?=[${CJK}])`,'g'),'$1');
+ const tok=s.split(' ');
+ if(tok.length>=4&&tok.filter(t=>t.length===1).length>=tok.length*0.6)s=tok.join('');
+ else s=s.replace(/(?:^|(?<= ))((?:[A-Za-z0-9'] ){3,}[A-Za-z0-9'])(?= |$)/g,m=>m.replace(/ /g,''));
+ return s.replace(/ {2,}/g,' ').trim();
+}
 function pdfPageLines(tc){
  const styles=tc.styles||{},lines=[];let cur=null;
- const flush=()=>{if(cur&&cur.str.trim())lines.push(cur);cur=null;};
+ const flush=()=>{if(cur){cur.str=cleanText(cur.str);if(cur.str)lines.push(cur);}cur=null;};
  for(const it of tc.items||[]){
   if(typeof it.str!=='string')continue;
   const t=it.transform||[1,0,0,1,0,0],size=Math.hypot(t[2],t[3])||it.height||10;
@@ -294,8 +306,8 @@ function pdfPageLines(tc){
  return lines;
 }
 function linesToBook(pages,title){
- const all=pages.flat();
- if(!all.length)err('このPDFには文字情報がありません（スキャン画像のPDFは組み直せません）。「画像として変換」を使ってください');
+ const all=pages.flat().filter(l=>!l.fig),hasFig=pages.flat().some(l=>l.fig!==undefined);
+ if(!all.length&&!hasFig)err('このPDFには文字情報がありません（スキャン画像のPDFは組み直せません）。「画像として変換」を使ってください');
  // 本文の文字サイズ＝文字数で重み付けした中央値
  const sizes=[];for(const l of all)for(let k=0;k<Math.min(l.chars,200);k++)sizes.push(l.size);
  sizes.sort((a,b)=>a-b);const body=sizes[Math.floor(sizes.length/2)]||10;
@@ -303,8 +315,14 @@ function linesToBook(pages,title){
  const chapters=[];let ch={title:'本文',text:'',pageMark:0};
  const END=/[。．.！？!?」』）)：:]$/;
  // 大見出しのしきい値：見出し候補（本文の1.35倍以上）の中で大きい側。候補が1種類ならそれを大見出しとする
- const heads=[...new Set(all.filter(l=>l.size>=body*1.35).map(l=>Math.round(l.size*2)/2))].sort((a,b)=>b-a);
- const h1=heads.length>1?Math.max(body*1.8,heads[0]*0.85):(heads[0]||Infinity);
+ // 大見出し＝本文の1.6倍以上で、文書中に3回以上（またはページ数の15%以上）現れる大きさのうち最大のもの。
+ // 表紙だけに1回出る巨大な文字ではなく、各ページの見出し（「何ができるツール？」等）を章にする。
+ const cnt=new Map();
+ for(const l of all)if(l.size>=body*1.35){const k=Math.round(l.size*2)/2;cnt.set(k,(cnt.get(k)||0)+1);}
+ const need=Math.max(3,Math.ceil(pages.length*0.15));
+ const rep=[...cnt].filter(([k,n])=>k>=body*1.6&&n>=need).map(([k])=>k).sort((a,b)=>b-a);
+ const anyH=[...cnt.keys()].sort((a,b)=>b-a);
+ const h1=rep.length?rep[0]-0.25:(anyH[0]?anyH[0]-0.25:Infinity);
  let pageNo=0;
  for(const lines of pages){
   pageNo++;
@@ -314,11 +332,13 @@ function linesToBook(pages,title){
   const blocks=[];
   for(const l of lines){
    const b=blocks[blocks.length-1],p=b&&b[b.length-1];
+   if(l.fig!==undefined||p?.fig!==undefined){blocks.push([l]);continue;}
    if(p&&!(l.size>=body*1.35)&&!(p.size>=body*1.35)&&Math.abs(l.size-p.size)<p.size*0.15&&
       Math.abs(l.a0-p.a0)<=p.size*1.2&&Math.abs(l.pos-p.pos)<=p.size*2.4)b.push(l);
    else blocks.push([l]);
   }
   for(const b of blocks){
+   if(b[0].fig!==undefined){ch.text+='\uE000'+b[0].fig+'\n';ch.pageMark=pageNo;continue;}
    const edge=Math.max(...b.map(l=>l.a1));
    let para='';
    b.forEach((l,k)=>{
@@ -328,7 +348,7 @@ function linesToBook(pages,title){
      const rows=ch.text.replace(/\n+$/,'').split('\n'),last=rows[rows.length-1]||'';
      const label=last&&last.length<=16&&!/^[■●]/.test(last)&&ch.pageMark===pageNo?last:'';
      if(label)ch.text=rows.slice(0,-1).join('\n')+'\n';
-     if(l.size>=h1){                                    // 大見出し → 章（改ページ・目次）
+     if(l.size>=h1&&!(rep.length&&l.size>rep[0]+0.75&&(cnt.get(Math.round(l.size*2)/2)||0)<need)){  // 大見出し → 章
       if(ch.text.trim())chapters.push(ch);
       ch={title:s.slice(0,90),text:'■ '+s+'\n'+(label?label+'\n':'')+'\n',pageMark:pageNo};
      }else{                                             // 中見出し → 本文中の見出し行
@@ -347,10 +367,66 @@ function linesToBook(pages,title){
  }
  if(ch.text.trim())chapters.push(ch);
  if(!chapters.length)err('PDFから本文を取り出せませんでした');
+ if(chapters.length>1&&chapters[0].title==='本文')chapters[0].title='表紙・はじめ';
  return{title,author:'',chapters,source:'pdf',vertical};
 }
-async function pdfToBook(files,progress=()=>{}){
- const lib=await loadPDF(),assets=await pdfAssets(),pages=[];
+// v0.6.0: ページ内の図（ラスター画像）の位置を、描画命令から求める。
+// 変換行列（CTM）を save/restore/transform とフォーム XObject で追い、画像描画命令の単位正方形を写す。
+const mulM=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],
+ a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+async function pageFigureRects(lib,page,hasText){
+ const OPS=lib.OPS,ol=await page.getOperatorList(),vb=page.view;  // view=[x0,y0,x1,y1]
+ const pw=vb[2]-vb[0],ph=vb[3]-vb[1];
+ let ctm=[1,0,0,1,0,0];const stack=[],rects=[];
+ const imgOps=new Set([OPS.paintImageXObject,OPS.paintInlineImageXObject,OPS.paintImageMaskXObject,OPS.paintJpegXObject].filter(x=>x!==undefined));
+ for(let i=0;i<ol.fnArray.length;i++){
+  const fn=ol.fnArray[i],args=ol.argsArray[i];
+  if(fn===OPS.save)stack.push(ctm);
+  else if(fn===OPS.restore)ctm=stack.pop()||[1,0,0,1,0,0];
+  else if(fn===OPS.transform)ctm=mulM(ctm,args);
+  else if(fn===OPS.paintFormXObjectBegin){stack.push(ctm);if(Array.isArray(args?.[0])&&args[0].length===6)ctm=mulM(ctm,args[0]);}
+  else if(fn===OPS.paintFormXObjectEnd)ctm=stack.pop()||[1,0,0,1,0,0];
+  else if(imgOps.has(fn)){
+   const pts=[[0,0],[1,0],[0,1],[1,1]].map(([x,y])=>[ctm[0]*x+ctm[2]*y+ctm[4],ctm[1]*x+ctm[3]*y+ctm[5]]);
+   const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+   rects.push([Math.max(vb[0],Math.min(...xs)),Math.max(vb[1],Math.min(...ys)),Math.min(vb[2],Math.max(...xs)),Math.min(vb[3],Math.max(...ys))]);
+  }
+ }
+ // 小さいアイコンは除外、全面の背景画像は（文字のあるページでは）除外、重なる図はまとめる
+ let out=rects.filter(r=>{const w=r[2]-r[0],h=r[3]-r[1];
+  if(w<=0||h<=0||w*h<pw*ph*0.03||w<pw*0.12||h<ph*0.05)return false;
+  if(hasText&&w*h>=pw*ph*0.85)return false;
+  return true;});
+ let merged=true;
+ while(merged){merged=false;
+  for(let a=0;a<out.length&&!merged;a++)for(let b=a+1;b<out.length&&!merged;b++){
+   const A=out[a],B=out[b],gap=Math.min(pw,ph)*0.02;
+   if(A[0]-gap<B[2]&&B[0]-gap<A[2]&&A[1]-gap<B[3]&&B[1]-gap<A[3]){
+    out[a]=[Math.min(A[0],B[0]),Math.min(A[1],B[1]),Math.max(A[2],B[2]),Math.max(A[3],B[3])];out.splice(b,1);merged=true;}
+  }
+ }
+ return out;
+}
+// 図の範囲を 528×792 の1ページに描く（横長の図は opt.rotateWide のとき90°回して大きく表示）
+async function renderFigurePage(page,rect,opt){
+ const W=528,H=792,M=12,rw=rect[2]-rect[0],rh=rect[3]-rect[1];
+ const rotate=!!opt.rotateWide&&rw/rh>1.3;
+ const bw=rotate?H-2*M:W-2*M,bh=rotate?W-2*M:H-2*M,s=Math.min(bw/rw,bh/rh);
+ const vp=page.getViewport({scale:s}),vr=vp.convertToViewportRectangle(rect);
+ const vx=Math.min(vr[0],vr[2]),vy=Math.min(vr[1],vr[3]);
+ const c=document.createElement('canvas');c.width=Math.max(1,Math.round(rw*s));c.height=Math.max(1,Math.round(rh*s));
+ const cx=c.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,c.width,c.height);
+ await page.render({canvasContext:cx,viewport:vp,background:'rgb(255,255,255)',transform:[1,0,0,1,-vx,-vy]}).promise;
+ const out=document.createElement('canvas');out.width=W;out.height=H;
+ const ox=out.getContext('2d',{willReadFrequently:true});ox.fillStyle='#fff';ox.fillRect(0,0,W,H);
+ if(rotate){ox.save();ox.translate(W/2,H/2);ox.rotate(-Math.PI/2);ox.drawImage(c,-c.width/2,-c.height/2);ox.restore();}
+ else ox.drawImage(c,Math.round((W-c.width)/2),Math.round((H-c.height)/2));
+ const data=ox.getImageData(0,0,W,H).data;
+ c.width=c.height=0;out.width=out.height=0;
+ return g.EbookForgeManga.encodeFigure(data,W,H);
+}
+async function pdfToBook(files,progress=()=>{},opt={}){
+ const lib=await loadPDF(),assets=await pdfAssets(),pages=[],figures=[];
  let title='';
  for(const file of files){
   if(fileType(file.name)!=='pdf')err('「文字を組み直す」はPDFだけに使えます: '+file.name);
@@ -362,17 +438,30 @@ async function pdfToBook(files,progress=()=>{}){
    if(doc.numPages>MAX_PDF_PAGES*3)err(`PDFは${MAX_PDF_PAGES*3}ページ以内にしてください`);
    for(let i=1;i<=doc.numPages;i++){
     const page=await doc.getPage(i);
-    try{pages.push(pdfPageLines(await page.getTextContent()));}finally{if(page.cleanup)page.cleanup();}
+    try{
+     const lines=pdfPageLines(await page.getTextContent());
+     if(opt.figures!==false&&figures.length<300){
+      const rects=await pageFigureRects(lib,page,lines.length>0);
+      // 図の上端より下にある最初の行の前に図を挿す（横書き）。縦書きのページはページ末尾
+      for(const r of rects.sort((a,b)=>b[3]-a[3])){
+       const id=figures.length;figures.push(await renderFigurePage(page,r,opt));
+       const k=lines.some(l=>l.vertical)?-1:lines.findIndex(l=>!l.fig&&l.pos<r[3]-1);
+       const mark={fig:id,pos:r[3],size:0,chars:0,str:''};
+       if(k<0)lines.push(mark);else lines.splice(k,0,mark);
+      }
+     }
+     pages.push(lines);
+    }finally{if(page.cleanup)page.cleanup();}
     progress(i,doc.numPages);
     if(i%5===0)await new Promise(ok=>setTimeout(ok,0));
    }
   }catch(e){if(e?.name==='PasswordException')throw Error('パスワード付きPDFは未対応です');throw e;}
   finally{await doc.destroy();}
  }
- return linesToBook(pages,title);
+ const book=linesToBook(pages,title);book.figures=figures;return book;
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,ENGINE:'0.5.8',
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,ENGINE:'0.6.0',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})

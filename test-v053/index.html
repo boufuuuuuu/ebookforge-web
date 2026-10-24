@@ -5,7 +5,7 @@
 .toc{max-height:310px;overflow:auto;border:1px solid #ddd;border-radius:8px}.toc label{display:flex;gap:12px;font-weight:400;border-bottom:1px solid #eee;padding:12px;margin:0}.toc input{width:18px;height:18px;flex:none}
 #preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}[hidden]{display:none!important}
 @media(max-width:540px){.toprow{grid-template-columns:1fr}.btnline{flex-wrap:wrap}}.search-result{padding:12px;border-bottom:1px solid #ddd}.manga-sites{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:9px}.manga-sites a{display:block;padding:10px;border:1px solid #ccd6df;border-radius:8px;text-decoration:none}.manga-sites small{display:block}.manga-preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}.search-result a{font-weight:700}.smallbtn{font-size:.85rem;padding:7px}
-</style></head><body><h1>EbookForge Web <small>v0.5.8 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
+</style></head><body><h1>EbookForge Web <small>v0.6.0 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
 
 <section><h2>① X3の出力モード</h2>
 <label for="profile">利用するファームウェア</label>
@@ -76,6 +76,7 @@
 <div><label for="manga-pdf-split">PDFの文字を拡大（ページ分割）</label><select id="manga-pdf-split"><option value="none" selected>1ページのまま（漫画・縦書きの本）</option><option value="h2r">横書き1段：上下2分割＋横向き表示（約1.4倍）</option><option value="col2ltr">横書き2段組：4分割（左段→右段・約2倍）</option><option value="col2rtl">縦書き2段組：4分割（上段→下段・約2倍）</option></select></div>
 <div><label for="manga-pdf-mode">PDFの変換方法</label><select id="manga-pdf-mode"><option value="image" selected>画像として（レイアウトそのまま）</option><option value="reflow">文字を組み直す（小さい文字のPDF向け）</option></select></div>
 <div><label for="manga-reflow-size">組み直す文字サイズ</label><select id="manga-reflow-size"><option value="18">18px</option><option value="22" selected>22px</option><option value="26">26px</option><option value="30">30px</option></select></div>
+<div><label for="manga-reflow-fig">組み直し時の図・写真</label><select id="manga-reflow-fig"><option value="rotate" selected>入れる（横長の図は横向きで大きく）</option><option value="plain">入れる（回転しない）</option><option value="off">入れない（文字だけ）</option></select></div>
 <div><label for="manga-sharp">PDFの文字</label><select id="manga-sharp"><option value="on" selected>くっきり（文字のページに自動適用）</option><option value="off">オフ（従来の変換）</option></select></div>
 <div><label for="manga-long">縦長画像</label><select id="manga-long"><option value="auto">自動で上下分割</option><option value="none">分割しない</option></select></div>
 <div><label for="manga-trim">余白調整</label><select id="manga-trim"><option value="on">白い余白を自動除去</option><option value="off">画像全体を保持</option></select></div>
@@ -84,7 +85,7 @@
 <div><label for="manga-volume">分冊して保存</label><select id="manga-volume"><option value="0">分割しない</option><option value="50">50ページごと</option><option value="100">100ページごと</option><option value="150">150ページごと</option></select></div>
 </div>
 <p id="manga-mem-note" class="hint"></p>
-<p class="hint">「文字を組み直す」：PDFの文字情報を取り出して、選んだ大きさで組み直します。小さい文字の資料も読みやすくなりますが、表・図・段組の配置は再現しません（文字だけになります）。スキャン画像のPDFには使えません。</p>
+<p class="hint">「文字を組み直す」：PDFの文字情報を取り出して、選んだ大きさで組み直します。小さい文字の資料も読みやすくなりますが、図・写真（画像）は元の位置の近くに1ページずつ挿し込みます。線で描かれたグラフや表の罫線、段組の配置は再現しません。スキャン画像のPDFには使えません。</p>
 <p class="hint">PDFの分割：分割位置は行間・段間の空白に自動で合わせます。「横向き表示」は端末を時計回りに90°倒して読みます。1段組の縦書きの本は、行を切らずに拡大する分割が原理的にできないため「1ページのまま」を使ってください。</p>
 <div class="btnline"><button id="manga-build">漫画画像を変換してプレビュー</button><button id="manga-cancel" hidden>中止</button></div>
 <p id="manga-status" class="status" role="status"></p>
@@ -126,4 +127,4 @@
 <p class="hint">DRMの解除は行いません。原本は変更せず別ファイルを保存します。著作権・利用条件に従って利用してください。</p>
 </section>
 <section><h2>本文を入力</h2><label for="file">UTF-8テキストファイル</label><input id="file" type="file" accept=".txt,text/plain"><label for="title">タイトル</label><input id="title" value="電子書籍"><label for="author">著者</label><input id="author" placeholder="任意"><label for="body">本文</label><textarea id="body" placeholder="ここに本文を貼り付けることもできます"></textarea></section>
-<section><h2>変換</h2><label for="device">端末</label><select id="device"><option value="X3" selected>XTEINK X3（528×792）</option><option value="X4">XTEINK X4（480×800）</option></select><label for="size">文字サイズ</label><select id="size"><option value="22">22 px</option><option value="18">18 px</option><option value="26">26 px</option></select><button id="convert">XTCを作成して保存</button><p id="status" class="status" role="status"></p><p class="hint">横書き・1bit XTCの初期実装です。ルビ、縦書き、XTCH、端末への直接Wi-Fi送信は未対応。生成ファイルの実機動作は未検証です。</p></section></details><script src="epub.js?v=0.5.8"></script><script src="app.js?v=0.5.8"></script><script src="book.js?v=0.5.8"></script><script src="catalog.js?v=0.5.8"></script><script src="studio.js?v=0.5.8"></script><script src="document-input.js?v=0.5.8"></script><script src="manga.js?v=0.5.8"></script><script src="manga-ui.js?v=0.5.8"></script></body></html>
+<section><h2>変換</h2><label for="device">端末</label><select id="device"><option value="X3" selected>XTEINK X3（528×792）</option><option value="X4">XTEINK X4（480×800）</option></select><label for="size">文字サイズ</label><select id="size"><option value="22">22 px</option><option value="18">18 px</option><option value="26">26 px</option></select><button id="convert">XTCを作成して保存</button><p id="status" class="status" role="status"></p><p class="hint">横書き・1bit XTCの初期実装です。ルビ、縦書き、XTCH、端末への直接Wi-Fi送信は未対応。生成ファイルの実機動作は未検証です。</p></section></details><script src="epub.js?v=0.6.0"></script><script src="app.js?v=0.6.0"></script><script src="book.js?v=0.6.0"></script><script src="catalog.js?v=0.6.0"></script><script src="studio.js?v=0.6.0"></script><script src="document-input.js?v=0.6.0"></script><script src="manga.js?v=0.6.0"></script><script src="manga-ui.js?v=0.6.0"></script></body></html>

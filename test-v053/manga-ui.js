@@ -49,17 +49,22 @@ $('manga-build').addEventListener('click',async()=>{
    // v0.5.7: PDF の文字を取り出して、選んだ文字サイズで組み直す（小さい文字のPDF向け）
    if(!raw.length)throw Error('PDFを選んでください');
    status('PDFから文字を取り出しています…');
-   const book=await EbookForgeDocuments.pdfToBook(raw,(i,n)=>status(`文字を取り出し中：${i}/${n}ページ`));
+   const figMode=$('manga-reflow-fig').value;
+   const book=await EbookForgeDocuments.pdfToBook(raw,(i,n)=>status(`文字と図を取り出し中：${i}/${n}ページ`),
+     {figures:figMode!=='off',rotateWide:figMode==='rotate'});
    if(cancel)throw Error('処理を中止しました');
    status(`組版中：${book.chapters.length}章（${book.vertical?'縦書き':'横書き'}）…`);
-   const r=await EbookForgeBook.renderBook(book,{vertical:book.vertical,font:Number($('manga-reflow-size').value)||22},
+   // 電子ペーパーの白黒表示では明朝の細い横線が消えやすいため、ゴシック体・やや太字・しきい値高めで組む
+   const r=await EbookForgeBook.renderBook(book,{vertical:book.vertical,font:Number($('manga-reflow-size').value)||22,
+     fontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP",sans-serif',fontWeight:600,inkThreshold:150,
+     figures:book.figures},
      (i,n)=>status(`組版中：${i}/${n}章`));
    result={pages:r.pages,chapters:r.chapters,format:'xtc',width:528,height:792};
    if(!$('manga-title').value||$('manga-title').value==='漫画・写真集')$('manga-title').value=book.title;
    fillChapters();
    libraryKey='ebookforge-manga-page:'+($('manga-title').value||'漫画');
    $('manga-preview-box').hidden=false;show(0);
-   status(`変換完了（文字を組み直し・v0.5.8）：${book.chapters.length}章 → ${result.pages.length}ページ。表や図の配置は再現しません。XTC（白黒）で保存します。`);
+   status(`変換完了（文字を組み直し・v0.6.0）：${book.chapters.length}章・図${book.figures.length}枚 → ${result.pages.length}ページ。図は1ページずつ挿入します。XTC（白黒）で保存します。`);
    return;
   }
   sources=await EbookForgeManga.collect(raw,(i,n)=>status(`ファイルを確認中：${i}/${n}`));
@@ -124,6 +129,6 @@ $('manga-export').addEventListener('click',()=>{
  }catch(e){status('保存できませんでした：'+e.message);}
 });
 try{const v=document.createElement('p');v.className='hint';v.id='engine-version';
- v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.5.8';
+ v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.6.0';
  document.querySelector('h1')?.after(v);}catch(_){}
 })();

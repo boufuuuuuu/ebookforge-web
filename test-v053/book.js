@@ -62,8 +62,11 @@ function tokenize(s){
  function add(t){for(const x of t.match(/\n|[A-Za-z0-9]{1,20}|[\s\S]/gu)||[])out.push(x==='\n'?{t:'nl'}:{t:/^[A-Za-z0-9]{2,20}$/.test(x)?'ascii':'char',s:x});}
  while((m=re.exec(s))){add(s.slice(pos,m.index));out.push({t:'ruby',s:m[1],ruby:m[2]});pos=re.lastIndex;}add(s.slice(pos));return out;
 }
+// v0.5.9: 書体・太さ・白黒化のしきい値を renderBook のオプションで変更可能に（既定は従来どおり明朝・128）
+const MINCHO='"Hiragino Mincho ProN","Yu Mincho",serif';
+let FAM=MINCHO,WT='',THR=128;
 function drawV(ctx,t,x,y,step,size){
- ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`${size}px "Hiragino Mincho ProN","Yu Mincho",serif`;
+ ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`${WT}${size}px ${FAM}`;
  if(t.t==='ruby'){
   const base=Array.from(t.s);base.forEach((c,i)=>drawV(ctx,{t:'char',s:c},x,y+i*step,step,size));
   const chars=Array.from(t.ruby),fs=Math.max(9,Math.floor(size*.46)),d=Math.min(step*.6,base.length*step/Math.max(chars.length,1));
@@ -78,7 +81,7 @@ function drawV(ctx,t,x,y,step,size){
 function pack(ctx,W,H){
  const pix=ctx.getImageData(0,0,W,H).data,stride=Math.ceil(W/8),data=new Uint8Array(stride*H);data.fill(255);
  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
- const p=(y*W+x)*4;if(pix[p]*.299+pix[p+1]*.587+pix[p+2]*.114<128)data[y*stride+(x>>3)]&=~(128>>(x&7));}
+ const p=(y*W+x)*4;if(pix[p]*.299+pix[p+1]*.587+pix[p+2]*.114<THR)data[y*stride+(x>>3)]&=~(128>>(x&7));}
  return data;
 }
 function decodePage(b,W,H,canvas,xtch=false){
@@ -96,6 +99,10 @@ function decodePage(b,W,H,canvas,xtch=false){
  }ctx.putImageData(img,0,0);
 }
 async function renderBook(book,opt={},progress=()=>{}){
+ FAM=opt.fontFamily||MINCHO;WT=opt.fontWeight?opt.fontWeight+' ':'';THR=Number(opt.inkThreshold)||128;
+ try{return await renderBookInner(book,opt,progress);}finally{FAM=MINCHO;WT='';THR=128;}
+}
+async function renderBookInner(book,opt={},progress=()=>{}){
  const W=528,H=792,v=opt.vertical!==false,fs=Number(opt.font)||22,m=Number(opt.margin)||30,spacing=Number(opt.spacing)||1.45;
  if(fs<14||fs>40||m<12||m>90||spacing<1.05||spacing>2.3)throw Error('組版設定が不正です');
  const step=Math.ceil(fs*spacing),line=Math.ceil(fs*(spacing+.15)),rows=Math.floor((H-2*m)/step),cols=Math.floor((W-2*m)/line);
@@ -109,7 +116,22 @@ async function renderBook(book,opt={},progress=()=>{}){
  const close=new Set(Array.from('、。，）」』】ぁぃぅぇぉっゃゅょ')),open=new Set(Array.from('（「『【'));
  for(let j=0;j<selected.length;j++){
   if(ink)save();const start=pages.length,ch=selected[j];chapters.push({title:ch.title,page:start});
-  const ts=tokenize(ch.text);
+  // v0.6.0: 本文中の図の印（\uE000番号）で区切り、図は用意済みのページ（opt.figures[番号]）として挿し込む
+  const parts=String(ch.text).split(/\uE000(\d+)\n?/);
+  for(let q=0;q<parts.length;q++){
+   if(q%2===1){
+    const fig=opt.figures&&opt.figures[Number(parts[q])];
+    if(fig){if(ink)save();pages.push(fig);if(pages.length>900)throw Error('900ページを超えています');reset();}
+    continue;
+   }
+   await layoutText(parts[q]);
+  }
+  if(ink||pages.length===start)save(true);
+  progress(j+1,selected.length);await new Promise(ok=>setTimeout(ok,0));
+ }
+ return {pages,chapters,width:W,height:H};
+ async function layoutText(text){
+  const ts=tokenize(text);
   for(let i=0;i<ts.length;i++){
    const list=ts[i].t==='ascii'&&ts[i].s.length>2?Array.from(ts[i].s).map(s=>({t:'char',s})):[ts[i]];
    for(const t of list){
@@ -122,17 +144,14 @@ async function renderBook(book,opt={},progress=()=>{}){
      drawV(ctx,t,W-m-fs/2-c*line,m+fs/2+r*step,step,fs);r+=cells;ink=true;
     }else{
      const value=t.t==='ruby'?t.s+'（'+t.ruby+'）':t.s;
-     ctx.font=`${fs}px "Hiragino Mincho ProN",serif`;ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle='#000';
+     ctx.font=`${WT}${fs}px ${FAM}`;ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle='#000';
      const width=ctx.measureText(value).width;if(c+width>W-2*m&&c>0)next();
      ctx.fillText(value,m+c,m+r*step);c+=width;ink=true;
     }
    }
    if(i%500===0&&i)await new Promise(ok=>setTimeout(ok,0));
   }
-  if(ink||pages.length===start)save(true);
-  progress(j+1,selected.length);await new Promise(ok=>setTimeout(ok,0));
  }
- return {pages,chapters,width:W,height:H};
 }
 function buildXtcWithChapters(pages,chapters,title,author,vertical=true,format='xtc'){
  const W=528,H=792,N=pages.length,HEAD=56,META=256,CH=96,ENTRY=16,PH=22;
