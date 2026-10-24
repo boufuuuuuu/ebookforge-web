@@ -1,4 +1,4 @@
-/* EbookForge Web 0.6.2: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.6.3: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -400,7 +400,62 @@ function pathShape(OPS,ops,co){
  }
  return{pts,rect,closed,segs};
 }
-async function pageFigureRects(lib,page,lines=[],debug=null){
+// v0.6.3: 描画結果から図を探す。文字行と既知の図を消し、濃い画素（輝度200未満）の塊を4px単位のマスで連結する。
+// 上下に並ぶ長い線（概念図の点線など）は、横方向に半分以上重なり、間隔がページ高さの4%以内ならつなぐ。
+async function inkFigureRects(page,vb,tRects,known,hasText){
+ const pw=vb[2]-vb[0],ph=vb[3]-vb[1],s=Math.min(1,480/pw),vp=page.getViewport({scale:s});
+ const W=Math.max(1,Math.round(vp.width)),H=Math.max(1,Math.round(vp.height));
+ const c=document.createElement('canvas');c.width=W;c.height=H;
+ const cx=c.getContext('2d',{willReadFrequently:true});cx.fillStyle='#fff';cx.fillRect(0,0,W,H);
+ await page.render({canvasContext:cx,viewport:vp,background:'rgb(255,255,255)'}).promise;
+ const d=cx.getImageData(0,0,W,H).data;c.width=c.height=0;
+ const ink=new Uint8Array(W*H),txt=new Uint8Array(W*H);
+ for(let i=0,j=0;i<ink.length;i++,j+=4)ink[i]=(d[j]*0.299+d[j+1]*0.587+d[j+2]*0.114)<200?1:0;
+ const clear=(r,mark)=>{const v=vp.convertToViewportRectangle(r);
+  const x0=Math.max(0,Math.floor(Math.min(v[0],v[2]))-1),x1=Math.min(W,Math.ceil(Math.max(v[0],v[2]))+1);
+  const y0=Math.max(0,Math.floor(Math.min(v[1],v[3]))-1),y1=Math.min(H,Math.ceil(Math.max(v[1],v[3]))+1);
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const i=y*W+x;if(mark)txt[i]=1;ink[i]=0;}};
+ for(const t of tRects)clear(t,true);
+ for(const r of known)clear(r,false);
+ const C=4,GW=Math.ceil(W/C),GH=Math.ceil(H/C),cell=new Uint16Array(GW*GH);
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(ink[y*W+x])cell[((y/C)|0)*GW+((x/C)|0)]++;
+ const lab=new Int32Array(GW*GH).fill(-1),comps=[];
+ for(let i=0;i<cell.length;i++){
+  if(cell[i]<2||lab[i]>=0)continue;
+  const q=[i];lab[i]=comps.length;let x0=GW,y0=GH,x1=-1,y1=-1,px=0,cells=0,full=0;
+  while(q.length){const k=q.pop(),kx=k%GW,ky=(k/GW)|0;px+=cell[k];cells++;if(cell[k]>=C*C-2)full++;
+   if(kx<x0)x0=kx;if(kx>x1)x1=kx;if(ky<y0)y0=ky;if(ky>y1)y1=ky;
+   for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=kx+dx,ny=ky+dy;if(nx<0||ny<0||nx>=GW||ny>=GH)continue;
+    const n=ny*GW+nx;if(cell[n]>=2&&lab[n]<0){lab[n]=comps.length;q.push(n);}}}
+  comps.push({b:[x0,y0,x1+1,y1+1],px,n:1,cells,full});
+ }
+ const gapV=Math.ceil(GH*0.04);
+ for(let merged=true;merged;){merged=false;
+  for(let a=0;a<comps.length&&!merged;a++)for(let b=a+1;b<comps.length&&!merged;b++){
+   const A=comps[a].b,B=comps[b].b;
+   const touch=A[0]-1<=B[2]&&B[0]-1<=A[2]&&A[1]-1<=B[3]&&B[1]-1<=A[3];
+   const ov=Math.min(A[2],B[2])-Math.max(A[0],B[0]),nar=Math.min(A[2]-A[0],B[2]-B[0]);
+   const vg=Math.max(A[1],B[1])-Math.min(A[3],B[3]);
+   const stack=nar>=GW*0.1&&ov>=nar*0.5&&vg<=gapV;
+   if(touch||stack){comps[a]={b:[Math.min(A[0],B[0]),Math.min(A[1],B[1]),Math.max(A[2],B[2]),Math.max(A[3],B[3])],px:comps[a].px+comps[b].px,n:comps[a].n+comps[b].n,cells:comps[a].cells+comps[b].cells,full:comps[a].full+comps[b].full};comps.splice(b,1);merged=true;}
+  }
+ }
+ const out=[];
+ for(const g of comps){
+  const[x0,y0,x1,y1]=g.b.map((v,k)=>v*C),w=Math.min(W,x1)-x0,h=Math.min(H,y1)-y0;
+  if(w<W*0.15||h<H*0.03||w*h<W*H*0.015)continue;            // 小さいアイコン・細い線1本
+  if(hasText&&w*h>=W*H*0.85)continue;                       // ページ全体の背景
+  let tp=0;for(let y=y0;y<y0+h;y++)for(let x=x0;x<x0+w;x++)tp+=txt[y*W+x];
+  const dens=g.px/(w*h),tr=tp/(w*h);
+  if(tr>0.08&&dens>0.45)continue;                           // 濃い背景の文字ボックス（白抜き文字）
+  if(g.full/Math.max(1,g.cells)>0.5)continue;               // 塗りつぶしの面（色付きの箱・帯）。図は線と文字で疎になる
+  if(typeof globalThis.__inkdbg==='object')globalThis.__inkdbg.push({b:[x0,y0,w,h],n:g.n,dens:+dens.toFixed(2),tr:+tr.toFixed(2),full:g.full,cells:g.cells});
+  const p0=vp.convertToPdfPoint(x0,y0),p1=vp.convertToPdfPoint(x0+w,y0+h);
+  out.push([Math.min(p0[0],p1[0]),Math.min(p0[1],p1[1]),Math.max(p0[0],p1[0]),Math.max(p0[1],p1[1])]);
+ }
+ return out;
+}
+async function pageFigureRects(lib,page,lines=[],debug=null,opt={}){
  const OPS=lib.OPS,ol=await page.getOperatorList(),vb=page.view;  // view=[x0,y0,x1,y1]
  const pw=vb[2]-vb[0],ph=vb[3]-vb[1],PA=pw*ph,hasText=lines.length>0;
  const tRects=lines.map(lineRect);
@@ -511,6 +566,11 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
   if(w<pw*0.15||h<ph*0.03||w*h<PA*0.015)continue;          // 小さいアイコン・細い帯は図にしない
   figs.push({r,raster:false});
  }
+ // --- (4) 最後の網（v0.6.3）：ページを実際に描き、文字と既に見つけた図を白で消して、残った「目に見えるもの」の塊を図とする。
+ //     CSS の背景画像（PDF内では「模様」）、図形化された文字、特殊な描き方の図など、(1)(2) で拾えないものを拾う。
+ if(opt.ink!==false&&typeof document!=='undefined'&&page.render){
+  try{for(const r of await inkFigureRects(page,vb,tRects,figs.map(f=>f.r),hasText))figs.push({r,raster:false,ink:true});}catch(e){}
+ }
  if(debug)Object.assign(debug,{shapes,boxes,groups:groups.map(g=>({r:g.r,n:g.items.length,items:g.items}))});
  // ベクター図に重なる文字（ラベル）を図に含め、本文から外す。1回だけ判定し、段落を連鎖的に飲み込まない
  const used=new Set();
@@ -606,7 +666,7 @@ async function pdfToBook(files,progress=()=>{},opt={}){
  const book=linesToBook(pages,title);book.figures=figures;return book;
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,ENGINE:'0.6.2',
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,ENGINE:'0.6.3',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})
