@@ -5,7 +5,7 @@
 .toc{max-height:310px;overflow:auto;border:1px solid #ddd;border-radius:8px}.toc label{display:flex;gap:12px;font-weight:400;border-bottom:1px solid #eee;padding:12px;margin:0}.toc input{width:18px;height:18px;flex:none}
 #preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}[hidden]{display:none!important}
 @media(max-width:540px){.toprow{grid-template-columns:1fr}.btnline{flex-wrap:wrap}}.search-result{padding:12px;border-bottom:1px solid #ddd}.manga-sites{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:9px}.manga-sites a{display:block;padding:10px;border:1px solid #ccd6df;border-radius:8px;text-decoration:none}.manga-sites small{display:block}.manga-preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}.search-result a{font-weight:700}.smallbtn{font-size:.85rem;padding:7px}
-</style></head><body><h1>EbookForge Web <small>v0.5.3 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
+</style></head><body><h1>EbookForge Web <small>v0.5.5 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
 
 <section><h2>① X3の出力モード</h2>
 <label for="profile">利用するファームウェア</label>
@@ -73,13 +73,15 @@
 <div><label for="manga-format">出力形式</label><select id="manga-format"><option value="xtc">XTC・白黒2階調（推奨）</option><option value="xtch">XTCH・4階調（X3ではメモリエラー注意）</option></select></div>
 <div><label for="manga-reading">読む向き</label><select id="manga-reading"><option value="rtl">右開き・右から左</option><option value="ltr">左開き・左から右</option></select></div>
 <div><label for="manga-spread">見開き画像</label><select id="manga-spread"><option value="auto">横長画像を自動で左右分割</option><option value="none">分割しない</option><option value="always">すべて左右に分割</option></select></div>
+<div><label for="manga-pdf-split">PDFの文字を拡大（ページ分割）</label><select id="manga-pdf-split"><option value="none" selected>1ページのまま（漫画・縦書きの本）</option><option value="h2r">横書き1段：上下2分割＋横向き表示（約1.4倍）</option><option value="col2ltr">横書き2段組：4分割（左段→右段・約2倍）</option><option value="col2rtl">縦書き2段組：4分割（上段→下段・約2倍）</option></select></div>
 <div><label for="manga-long">縦長画像</label><select id="manga-long"><option value="auto">自動で上下分割</option><option value="none">分割しない</option></select></div>
 <div><label for="manga-trim">余白調整</label><select id="manga-trim"><option value="on">白い余白を自動除去</option><option value="off">画像全体を保持</option></select></div>
-<div><label for="manga-contrast">コントラスト</label><select id="manga-contrast"><option value="1">標準</option><option value="1.35" selected>やや強い</option><option value="1.7">強い</option></select></div>
+<div><label for="manga-contrast">コントラスト</label><select id="manga-contrast"><option value="1" selected>標準</option><option value="1.35">やや強い</option><option value="1.7">強い</option></select></div>
 <div><label for="manga-dither">網点・階調補正</label><select id="manga-dither"><option value="off">なし</option><option value="on">順序ディザ</option></select></div>
 <div><label for="manga-volume">分冊して保存</label><select id="manga-volume"><option value="0">分割しない</option><option value="50">50ページごと</option><option value="100">100ページごと</option><option value="150">150ページごと</option></select></div>
 </div>
 <p id="manga-mem-note" class="hint"></p>
+<p class="hint">PDFの分割：分割位置は行間・段間の空白に自動で合わせます。「横向き表示」は端末を時計回りに90°倒して読みます。1段組の縦書きの本は、行を切らずに拡大する分割が原理的にできないため「1ページのまま」を使ってください。</p>
 <div class="btnline"><button id="manga-build">漫画画像を変換してプレビュー</button><button id="manga-cancel" hidden>中止</button></div>
 <p id="manga-status" class="status" role="status"></p>
 <div id="manga-preview-box" hidden><h3>変換後のX3表示プレビュー</h3>

@@ -41,6 +41,7 @@ $('manga-build').addEventListener('click',async()=>{
   if(cancel)throw Error('処理を中止しました');
   const opt={format:$('manga-format').value,reading:$('manga-reading').value,
     spread:$('manga-spread').value,long:$('manga-long').value,
+    pdfSplit:$('manga-pdf-split').value,
     trim:$('manga-trim').value==='on',
     contrast:Number($('manga-contrast').value),dither:$('manga-dither').value==='on'};
   result=await EbookForgeManga.render(sources,opt,(i,n,p)=>status(`変換中：画像${i}/${n}・${p}ページ`),()=>cancel);

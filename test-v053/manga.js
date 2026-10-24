@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.5.3 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.5.5 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -76,6 +76,63 @@ function inkInRegion(image,r){
  const x=r.x+Math.floor(l/scale),y=r.y+Math.floor(t/scale);
  return{x,y,w:Math.min(r.x+r.w-x,Math.ceil((rr-l)/scale)),
   h:Math.min(r.y+r.h-y,Math.ceil((bb-t)/scale))};
+}
+// v0.5.5: 分割位置を「行間・段間の空白」に吸着させる。profile[i]=i番目の行(列)のインク量。
+// target 付近 ±window の範囲で、インク0の連続区間のうち target に最も近い区間の中央を返す。
+// 空白が無ければインク最小の位置（文字を切る量が最も少ない位置）。
+function snapCut(profile,target,window){
+ const n=profile.length,lo=Math.max(1,Math.floor(target-window)),hi=Math.min(n-2,Math.ceil(target+window));
+ let best=null,i=lo;
+ while(i<=hi){
+  if(profile[i]===0){let j=i;while(j+1<=hi&&profile[j+1]===0)j++;
+   const c=(i+j)/2,d=Math.abs(c-target);if(!best||d<best.d)best={c,d};i=j+1;}
+  else i++;
+ }
+ if(best)return Math.round(best.c);
+ let m=lo;for(let k=lo;k<=hi;k++)if(profile[k]<profile[m])m=k;
+ return m;
+}
+// 分割計画。box=本文範囲、prof={x:列ごとのインク量, y:行ごとのインク量}（box 座標系・縮小率 s）。
+// mode: 'h2r' 横書き1段＝上下2分割＋90°回転 / 'col2ltr' 横書き2段組＝左段上→左段下→右段上→右段下
+//       'col2rtl' 縦書き2段組（上段・下段）＝上段右→上段左→下段右→下段左
+function planPdfSplit(box,mode,profAt){
+ const cut=(axis,a0,a1)=>{ // a0..a1（box 内座標）の中央付近で空白に吸着
+  const p=profAt(axis,a0,a1);const s=p.scale;
+  const t=(p.values.length-1)/2;return a0+Math.round(snapCut(p.values,t,p.values.length*0.18)/s);
+ };
+ const R=(x0,y0,x1,y1,rotate=false)=>({x:box.x+x0,y:box.y+y0,w:x1-x0,h:y1-y0,rotate,group:true});
+ const W0=box.w,H0=box.h;
+ if(mode==='h2r'){
+  const y=cut('y',0,H0);
+  return[R(0,0,W0,y,true),R(0,y,W0,H0,true)];
+ }
+ if(mode==='col2ltr'){
+  const x=cut('x',0,W0);                         // 段間（縦の余白）
+  const yl=cut('y',0,H0),yr=yl;                  // 各段を行間で上下に
+  return[R(0,0,x,yl),R(0,yl,x,H0),R(x,0,W0,yr),R(x,yr,W0,H0)];
+ }
+ if(mode==='col2rtl'){
+  const y=cut('y',0,H0);                         // 上段と下段の境（横の余白）
+  const xt=cut('x',0,W0);                        // 各段を列間で左右に
+  return[R(xt,0,W0,y),R(0,0,xt,y),R(xt,y,W0,H0),R(0,y,xt,H0)];
+ }
+ return[R(0,0,W0,H0)];
+}
+// 画像の領域 r のインク投影（axis='x' は列ごと、'y' は行ごと）。a0..a1 は r 内の範囲。
+function inkProfile(image,r,axis,a0,a1){
+ const c=document.createElement('canvas'),s=Math.min(1,600/Math.max(r.w,r.h));
+ c.width=Math.max(1,Math.round(r.w*s));c.height=Math.max(1,Math.round(r.h*s));
+ const ctx=c.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);
+ ctx.drawImage(image,r.x,r.y,r.w,r.h,0,0,c.width,c.height);
+ const pix=ctx.getImageData(0,0,c.width,c.height).data;
+ const b0=Math.floor(a0*s),b1=Math.min(axis==='x'?c.width:c.height,Math.ceil(a1*s));
+ const values=new Array(Math.max(1,b1-b0)).fill(0);
+ for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){
+  const i=(y*c.width+x)*4;
+  if(pix[i]*.299+pix[i+1]*.587+pix[i+2]*.114>239)continue;
+  const k=(axis==='x'?x:y)-b0;if(k>=0&&k<values.length)values[k]++;
+ }
+ return{values,scale:s};
 }
 function encodeGray(pixels,width,height,format='xtc',contrast=1,dither=false){
  if(!['xtc','xtch'].includes(format))throw Error('形式を選択してください');
@@ -228,14 +285,31 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
        return x1-x0>8&&y1-y0>8?{x:x0,y:y0,w:x1-x0,h:y1-y0}:r;
      }):(r=>inkInRegion(image,r));
    const popt=src.kind==='pdf'?{...opt,long:'none'}:opt;   // PDF のページは縦長分割しない
-   const regions=planRegions(iw,ih,popt,measure);
+   let regions;
+   const pdfSplit=src.kind==='pdf'?String(opt.pdfSplit||'none'):'none';
+   if(['h2r','col2ltr','col2rtl'].includes(pdfSplit)){
+    // 本文範囲（文書共通の余白を除いた領域）を、行間・段間の空白で分ける
+    const full={x:0,y:0,w:iw,h:ih},box=opt.trim?measure(full):full;
+    regions=planPdfSplit(box,pdfSplit,(axis,a0,a1)=>inkProfile(image,box,axis,a0,a1));
+   }else regions=planRegions(iw,ih,popt,measure);
    if(lastKey!==key){chapters.push({title:key,page:pages.length});lastKey=key;}
+   // 分割したページ同士は同じ倍率にする（ページごとに文字の大きさが変わらないように）
+   const gscale=regions.some(r=>r.group)?Math.min(...regions.map(r=>r.rotate?Math.min(W/r.h,H/r.w):Math.min(W/r.w,H/r.h))):null;
    for(const r of regions){
     if(cancel())throw Error('変換を中止しました');
     if(pages.length>=MAX_PAGES)throw Error(`出力ページが${MAX_PAGES}枚を超えています`);
     ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
-    const scale=Math.min(W/r.w,H/r.h),w=r.w*scale,h=r.h*scale;
-    ctx.drawImage(image,r.x,r.y,r.w,r.h,(W-w)/2,(H-h)/2,w,h);
+    if(r.rotate){
+     // 端末を時計回りに90°倒して読む。内容の上端を端末の左端に揃える
+     const scale=gscale||Math.min(W/r.h,H/r.w),w=r.w*scale,h=r.h*scale;
+     const ox=r.group?h/2:W/2;
+     ctx.save();ctx.translate(ox,H/2);ctx.rotate(-Math.PI/2);
+     ctx.drawImage(image,r.x,r.y,r.w,r.h,-w/2,-h/2,w,h);ctx.restore();
+    }else{
+     const scale=gscale||Math.min(W/r.w,H/r.h),w=r.w*scale,h=r.h*scale;
+     const oy=r.group?0:(H-h)/2;                    // 分割ページは上端に揃える
+     ctx.drawImage(image,r.x,r.y,r.w,r.h,(W-w)/2,oy,w,h);
+    }
     const data=ctx.getImageData(0,0,W,H).data;
     pages.push(encodeGray(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither)));
    }
@@ -260,5 +334,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,PAGE_W:W,PAGE_H:H};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,PAGE_W:W,PAGE_H:H};
 })(typeof window!=='undefined'?window:globalThis);
