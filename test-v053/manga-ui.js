@@ -64,7 +64,7 @@ $('manga-build').addEventListener('click',async()=>{
    fillChapters();
    libraryKey='ebookforge-manga-page:'+($('manga-title').value||'漫画');
    $('manga-preview-box').hidden=false;show(0);
-   status(`変換完了（文字を組み直し・v0.6.1）：${book.chapters.length}章・図${book.figures.length}枚 → ${result.pages.length}ページ。図は1ページずつ挿入します。XTC（白黒）で保存します。`);
+   status(`変換完了（文字を組み直し・v0.6.2）：${book.chapters.length}章・図${book.figures.length}枚 → ${result.pages.length}ページ。図は1ページずつ挿入します。XTC（白黒）で保存します。`);
    return;
   }
   sources=await EbookForgeManga.collect(raw,(i,n)=>status(`ファイルを確認中：${i}/${n}`));
@@ -129,6 +129,6 @@ $('manga-export').addEventListener('click',()=>{
  }catch(e){status('保存できませんでした：'+e.message);}
 });
 try{const v=document.createElement('p');v.className='hint';v.id='engine-version';
- v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.6.1';
+ v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.6.2';
  document.querySelector('h1')?.after(v);}catch(_){}
 })();

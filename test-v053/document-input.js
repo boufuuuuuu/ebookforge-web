@@ -1,4 +1,4 @@
-/* EbookForge Web 0.6.1: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.6.2: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -414,17 +414,22 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
   for(const[x,y]of pts){const X=ctm[0]*x+ctm[2]*y+ctm[4],Y=ctm[1]*x+ctm[3]*y+ctm[5];
    if(X<x0)x0=X;if(X>x1)x1=X;if(Y<y0)y0=Y;if(Y>y1)y1=Y;}
   return[Math.max(vb[0],x0),Math.max(vb[1],y0),Math.min(vb[2],x1),Math.min(vb[3],y1)];};
- let ctm=[1,0,0,1,0,0],pending=null;const stack=[],images=[],shapes=[];
+ let ctm=[1,0,0,1,0,0],pending=null,fc=0,sc=0;const stack=[],images=[],shapes=[];   // fc/sc=塗り・線の彩度（0〜255）
+ const chroma=a=>{if(!a||a.length<3)return 0;const v=[+a[0],+a[1],+a[2]];return Math.max(...v)-Math.min(...v);};
  const imgOps=new Set([OPS.paintImageXObject,OPS.paintInlineImageXObject,OPS.paintImageMaskXObject,OPS.paintJpegXObject].filter(x=>x!==undefined));
  const strokeOps=new Set([OPS.stroke,OPS.closeStroke].filter(x=>x!==undefined));
  const fillOps=new Set([OPS.fill,OPS.eoFill,OPS.fillStroke,OPS.eoFillStroke,OPS.closeFillStroke,OPS.closeEOFillStroke].filter(x=>x!==undefined));
  for(let i=0;i<ol.fnArray.length;i++){
   const fn=ol.fnArray[i],args=ol.argsArray[i];
-  if(fn===OPS.save)stack.push(ctm);
-  else if(fn===OPS.restore)ctm=stack.pop()||[1,0,0,1,0,0];
+  if(fn===OPS.save)stack.push([ctm,fc,sc]);
+  else if(fn===OPS.restore){const t=stack.pop();if(t&&Array.isArray(t[0])){[ctm,fc,sc]=t;}else ctm=[1,0,0,1,0,0];}
+  else if(fn===OPS.setFillRGBColor)fc=chroma(args);
+  else if(fn===OPS.setStrokeRGBColor)sc=chroma(args);
+  else if(fn===OPS.setFillGray||fn===OPS.setFillCMYKColor)fc=0;
+  else if(fn===OPS.setStrokeGray||fn===OPS.setStrokeCMYKColor)sc=0;
   else if(fn===OPS.transform)ctm=mulM(ctm,args);
-  else if(fn===OPS.paintFormXObjectBegin){stack.push(ctm);if(Array.isArray(args?.[0])&&args[0].length===6)ctm=mulM(ctm,args[0]);}
-  else if(fn===OPS.paintFormXObjectEnd)ctm=stack.pop()||[1,0,0,1,0,0];
+  else if(fn===OPS.paintFormXObjectBegin){stack.push([ctm,fc,sc]);if(Array.isArray(args?.[0])&&args[0].length===6)ctm=mulM(ctm,args[0]);}
+  else if(fn===OPS.paintFormXObjectEnd){const t=stack.pop();if(t&&Array.isArray(t[0])){[ctm,fc,sc]=t;}else ctm=[1,0,0,1,0,0];}
   else if(imgOps.has(fn))images.push(mapR(ctm,[[0,0],[1,0],[0,1],[1,1]]));
   else if(fn===OPS.constructPath){const sh=pathShape(OPS,args[0],args[1]);if(sh.pts.length)pending={...sh,ctm};}
   else if(strokeOps.has(fn)||fillOps.has(fn)){
@@ -432,7 +437,7 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
     const p=pending,r=mapR(p.ctm,p.pts),fill=fillOps.has(fn);
     // 回転・傾いた変換では「軸に平行」の判定を保てないので形のある図形として扱う
     const axis=Math.abs(p.ctm[1])<1e-6&&Math.abs(p.ctm[2])<1e-6||Math.abs(p.ctm[0])<1e-6&&Math.abs(p.ctm[3])<1e-6;
-    if(r[2]>=r[0]&&r[3]>=r[1])shapes.push({r,fill,rect:p.rect&&axis,closed:p.closed,segs:p.segs});
+    if(r[2]>=r[0]&&r[3]>=r[1])shapes.push({r,fill,rect:p.rect&&axis,closed:p.closed,segs:p.segs,colored:(fill?fc:sc)>=60});
    }
    pending=null;
   }else if(fn===OPS.endPath)pending=null;
@@ -453,7 +458,7 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
   if((s.fill||s.closed)&&holds){boxes.push(s.r);continue;}
   if(s.fill&&s.rect&&a>=PA*0.04){boxes.push(s.r);continue;}
   const rule=s.rect&&Math.min(w,h)<=thin;                    // 罫線・飾り線・枠の一辺
-  parts.push({r:s.r,rule,shape:!s.rect});
+  parts.push({r:s.r,rule,shape:!s.rect,colored:s.colored});
  }
  // 近い部品を束ねる
  const gap=Math.max(4,Math.min(pw,ph)*0.015),groups=[];
@@ -469,11 +474,22 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
    if(rHit(groups[a].r,groups[b].r,gap)){groups[a]={r:rUnion(groups[a].r,groups[b].r),items:groups[a].items.concat(groups[b].items)};groups.splice(b,1);merged=true;}
  }
  // 同じ箱に接する束はつなぐ（フローチャート：箱→矢印→箱→矢印…）。小さい箱だけを仲介にする
+ // 枠の中の図（HTML の概念図：枠の中に色付きの線・点線が何本も並ぶ）：同じ枠の中の部品はまとめる。
+ // ただし「枠の幅の4割以上の長い線が2本以上、かつ色付きの線が1本以上」の枠だけ（箇条書きの点・区切り線だけの枠は対象外）
+ for(const b of boxes){
+  if(rArea(b)>=PA*0.3)continue;
+  const inG=groups.filter(g=>g.r[0]>=b[0]-2&&g.r[2]<=b[2]+2&&g.r[1]>=b[1]-2&&g.r[3]<=b[3]+2);
+  const items=inG.flatMap(g=>g.items),bw=b[2]-b[0],bh=b[3]-b[1];
+  const long=items.filter(x=>x.r[2]-x.r[0]>=bw*0.4||x.r[3]-x.r[1]>=bh*0.4);
+  if(inG.length<2||items.length<3||long.length<2||!long.some(x=>x.colored))continue;
+  for(const g of inG)groups.splice(groups.indexOf(g),1);
+  groups.push({r:inG.map(g=>g.r).reduce(rUnion),items,framed:true});
+ }
  const smallBoxes=boxes.filter(b=>rArea(b)<PA*0.08);
  for(let merged=true;merged;){merged=false;
   for(let a=0;a<groups.length&&!merged;a++)for(let b=a+1;b<groups.length&&!merged;b++)
    if(smallBoxes.some(x=>rHit(x,groups[a].r,2)&&rHit(x,groups[b].r,2))){
-    groups[a]={r:rUnion(groups[a].r,groups[b].r),items:groups[a].items.concat(groups[b].items)};groups.splice(b,1);merged=true;}
+    groups[a]={r:rUnion(groups[a].r,groups[b].r),items:groups[a].items.concat(groups[b].items),framed:groups[a].framed||groups[b].framed};groups.splice(b,1);merged=true;}
  }
  const growByBoxes=r=>{                                    // 囲む枠・接する箱を取り込む（図形どうしの連鎖のみ。文字では連鎖させない）
   for(let changed=true,guard=0;changed&&guard<20;guard++){changed=false;
@@ -487,7 +503,7 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
  for(const f of figs)f.r=growByBoxes(f.r);
  for(const g of groups){
   if(g.items.length<3)continue;
-  const shapesN=g.items.filter(x=>x.shape||!x.rule).length;
+  const shapesN=g.items.filter(x=>x.shape||!x.rule||g.framed&&x.colored).length;
   // 罫線だけの束：外周以外にも線がある（表・グラフの目盛り等）なら図。枠の4辺だけなら図ではない
   const inner=g.items.filter(x=>x.rule&&x.r[0]>g.r[0]+thin*2&&x.r[2]<g.r[2]-thin*2||x.rule&&x.r[1]>g.r[1]+thin*2&&x.r[3]<g.r[3]-thin*2).length;
   if(shapesN===0&&inner<2)continue;
@@ -503,7 +519,9 @@ async function pageFigureRects(lib,page,lines=[],debug=null){
   const base=f.r;let r=base;
   tRects.forEach((t,k)=>{
    if(used.has(k))return;
-   if(rHit(t,base,Math.max(2,lines[k].size*0.8))){used.add(k);r=rUnion(r,t);}
+   const m=Math.max(2,lines[k].size*0.8);
+   // 文字幅の見積りが実際より広いことがある（太字・代替フォント）ので、図の枠から大きくはみ出す分は切る
+   if(rHit(t,base,m)){used.add(k);r=rUnion(r,[Math.max(t[0],base[0]-m*3),t[1],Math.min(t[2],base[2]+m*3),t[3]]);}
   });
   f.r=r;
  }
@@ -559,8 +577,21 @@ async function pdfToBook(files,progress=()=>{},opt={}){
       // 図の上端より下にある最初の行の前に図を挿す（横書き）。縦書きのページはページ末尾
       for(const r of rects.sort((a,b)=>b[3]-a[3])){
        const id=figures.length;figures.push(await renderFigurePage(page,r,opt));
-       const k=lines.some(l=>l.vertical)?-1:lines.findIndex(l=>!l.fig&&l.pos<r[3]-1);
+       // v0.6.2: PDF内の文字の記録順（ヘッダ・フッタが先に書かれることがある）に頼らず、
+       // ページ上で図の「すぐ上の行」の直後に置く。上に行が無ければ「すぐ下の行」の直前、どちらも無ければ末尾
        const mark={fig:id,pos:r[3],size:0,chars:0,str:''};
+       let k=-1;
+       if(!lines.some(l=>l.vertical)){
+        let up=-1,dn=-1;
+        lines.forEach((l,j)=>{if(l.fig!==undefined)return;
+         if(l.pos>r[3]-1){if(up<0||l.pos<lines[up].pos)up=j;}
+         else if(dn<0||l.pos>lines[dn].pos)dn=j;});
+        // 横に並ぶ段（カード3枚など）は、その段の最後に記録された行の後ろへ
+        if(up>=0){const p0=lines[up].pos,tol=Math.max(2,lines[up].size*0.6);
+         lines.forEach((l,j)=>{if(l.fig===undefined&&l.pos>r[3]-1&&l.pos<=p0+tol&&j>up)up=j;});}
+        k=up>=0?up+1:dn;
+        while(up>=0&&k<lines.length&&lines[k].fig!==undefined)k++;   // 同じ位置の先の図の後ろへ
+       }
        if(k<0)lines.push(mark);else lines.splice(k,0,mark);
       }
      }
@@ -575,7 +606,7 @@ async function pdfToBook(files,progress=()=>{},opt={}){
  const book=linesToBook(pages,title);book.figures=figures;return book;
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,ENGINE:'0.6.1',
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,ENGINE:'0.6.2',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})
