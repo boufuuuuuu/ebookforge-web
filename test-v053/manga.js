@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.5.7 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.5.8 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -241,8 +241,9 @@ function pageBufferBytes(format,width=W,height=H){
 function sanitizeName(n){return String(n||'漫画').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').slice(0,70);}
 function isImageName(n){return IMAGE_EXT.test(n)&&!n.startsWith('__MACOSX/')&&!/(^|\/)\./.test(n);}
 function chapterKey(src){
- const n=src.entryName||src.name,segments=n.split('/'),folder=segments.slice(0,-1);
- if(src.archive){return folder.length?`${src.archive} / ${folder.join(' / ')}`:src.archive;}
+ const dn=g.EbookForgeDocuments?.displayName||(x=>x);
+ const n=dn(src.entryName||src.name),segments=n.split('/'),folder=segments.slice(0,-1);
+ if(src.archive){const a=dn(src.archive);return folder.length?`${a} / ${folder.join(' / ')}`:a;}
  return '画像集';
 }
 async function collect(files,progress=()=>{}){
@@ -411,7 +412,7 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
   await sleep();
  }
  if(canvas2){canvas2.width=0;canvas2.height=0;}
- return{width:W,height:H,pages,chapters,format,stats,engine:'0.5.7'};
+ return{width:W,height:H,pages,chapters,format,stats,engine:'0.5.8'};
 }
 // 分冊: pages を size ページずつに分け、各巻の章リストを付け直す（巻頭には直前の章を引き継ぐ）
 function splitVolumes(pages,chapters,size){
@@ -428,5 +429,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,PAGE_W:W,PAGE_H:H};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,PAGE_W:W,PAGE_H:H,ENGINE:'0.5.8'};
 })(typeof window!=='undefined'?window:globalThis);

@@ -1,4 +1,4 @@
-/* EbookForge Web 0.5.7: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.5.8: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -24,9 +24,14 @@ let pdfPromise=null,unrarPromise=null;
 const testDeps={};
 // iPhone の「ファイル」経由だとファイル名が %E5%88%86… のまま渡ることがあるため表示用に戻す
 function displayName(name){
- const n=String(name||'');
- if(!/%[0-9A-Fa-f]{2}/.test(n))return n;
- try{return decodeURIComponent(n);}catch(_){return n;}
+ // v0.5.8: 連続する %XX ごとに個別に戻す（名前の一部に戻せない % があっても、残りは日本語に戻す）。
+ // 二重にエンコードされた名前（%25E5…）にも対応するため最大2回まで繰り返す。
+ let n=String(name||'');
+ for(let k=0;k<2&&/%[0-9A-Fa-f]{2}/.test(n);k++){
+  const next=n.replace(/(?:%[0-9A-Fa-f]{2})+/g,m=>{try{return decodeURIComponent(m);}catch(_){return m;}});
+  if(next===n)break;n=next;
+ }
+ return n;
 }
 function fileType(name){
  const n=String(name||'').toLowerCase();
@@ -367,7 +372,7 @@ async function pdfToBook(files,progress=()=>{}){
  return linesToBook(pages,title);
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,ENGINE:'0.5.8',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})
