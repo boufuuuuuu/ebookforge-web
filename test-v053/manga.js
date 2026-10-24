@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.5.6 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.5.7 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -199,6 +199,41 @@ function encodeGray(pixels,width,height,format='xtc',contrast=1,dither=false,sha
  }
  return out;
 }
+// v0.5.7: 2倍解像度で描いたページ（2W×2H）から文字を判定し、2×2 画素ごとに出力画素へまとめる。
+// 小さい文字は1倍で描くと線が薄く途切れるが、2倍なら線が濃く連続して描けるため判定が安定する。
+// 写真・漫画のページ（紙の白が半分未満）は平均で縮小して従来の変換に回す。
+function down2(p2,w,h){
+ const out=new Uint8ClampedArray(w*h*4),W2=w*2;
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+  const a=((y*2)*W2+x*2)*4,b=a+4,c=a+W2*4,d=c+4,o=(y*w+x)*4;
+  for(let k=0;k<3;k++)out[o+k]=(p2[a+k]+p2[b+k]+p2[c+k]+p2[d+k]+2)>>2;
+  out[o+3]=255;
+ }
+ return out;
+}
+function encodeGray2x(p2,width,height,format='xtc',contrast=1,dither=false,pool=1){
+ const W2=width*2,H2=height*2;
+ let paper=0;for(let i=0;i<W2*H2;i++){const g=p2[i*4]*.299+p2[i*4+1]*.587+p2[i*4+2]*.114;if(g>235)paper++;}
+ const small=down2(p2,width,height);
+ if(paper<W2*H2*0.5)return encodeGray(small,width,height,format,contrast,dither,false);   // 写真・漫画ページ
+ const m2=textMask(p2,W2,H2,Math.round(W2/14));
+ const xtch=format==='xtch';
+ const stride=Math.ceil(width/8),colStride=Math.ceil(height/8),planeSize=width*colStride;
+ const out=new Uint8Array(xtch?2*planeSize:stride*height);if(!xtch)out.fill(255);
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const i=(y*2)*W2+x*2,n=m2[i]+m2[i+1]+m2[i+W2]+m2[i+W2+1];
+  const ink=n>=pool;
+  if(xtch){
+   const o=(y*width+x)*4,g0=small[o]*.299+small[o+1]*.587+small[o+2]*.114;
+   const idx=ink?3:g0>=200?0:g0>=120?2:1;
+   const off=(width-1-x)*colStride+(y>>3),bit=128>>(y&7);
+   if(idx&2)out[off]|=bit;
+   if(idx&1)out[planeSize+off]|=bit;
+  }else if(ink)out[y*stride+(x>>3)]&=~(128>>(x&7));
+ }
+ out.sharp=true;
+ return out;
+}
 // 端末が1ページ表示ごとに確保する連続メモリ（CrossPoint XtcReaderActivity::renderPage の malloc と同じ式）
 function pageBufferBytes(format,width=W,height=H){
  return format==='xtch'?width*Math.ceil(height/8)*2:Math.ceil(width/8)*height;
@@ -303,6 +338,7 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
  const pages=[],chapters=[];
  const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
  const ctx=canvas.getContext('2d',{willReadFrequently:true});
+ let canvas2=null,ctx2=null;const stats={sharp2x:0};
  const boxes=new Map();
  if(opt.trim){
   const groups=new Map();
@@ -336,39 +372,46 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
    if(lastKey!==key){chapters.push({title:key,page:pages.length});lastKey=key;}
    // 分割したページ同士は同じ倍率にする（ページごとに文字の大きさが変わらないように）
    const gscale=regions.some(r=>r.group)?Math.min(...regions.map(r=>r.rotate?Math.min(W/r.h,H/r.w):Math.min(W/r.w,H/r.h))):null;
+   const sharp=src.kind==='pdf'&&opt.sharpText!=='off';
+   const F=sharp&&src.renderRegion&&opt.pdfDirect!==false?2:1;   // 2倍描画
+   const cv=F===1?canvas:(canvas2||(canvas2=Object.assign(document.createElement('canvas'),{width:W*2,height:H*2})));
+   const cx=F===1?ctx:(ctx2||(ctx2=cv.getContext('2d',{willReadFrequently:true})));
    for(const r of regions){
     if(cancel())throw Error('変換を中止しました');
     if(pages.length>=MAX_PAGES)throw Error(`出力ページが${MAX_PAGES}枚を超えています`);
-    ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+    cx.fillStyle='#fff';cx.fillRect(0,0,W*F,H*F);
     // PDF は最終倍率で直接描いた画像を 1:1 で配置（縮小による文字の欠けを防ぐ）
     let srcImg=image,sr=r,direct=null;
     if(src.renderRegion&&opt.pdfDirect!==false){
-     const k=gscale||(r.rotate?Math.min(W/r.h,H/r.w):Math.min(W/r.w,H/r.h));
+     const k=(gscale||(r.rotate?Math.min(W/r.h,H/r.w):Math.min(W/r.w,H/r.h)))*F;
      direct=await src.renderRegion(r,k);
      srcImg=direct;sr={x:0,y:0,w:direct.width,h:direct.height,rotate:r.rotate,group:r.group};
     }
+    const TW=W*F,TH=H*F;
     try{
     if(r.rotate){
      // 端末を時計回りに90°倒して読む。内容の上端を端末の左端に揃える
      const scale=direct?1:(gscale||Math.min(W/r.h,H/r.w)),w=sr.w*scale,h=sr.h*scale;
-     const ox=r.group?h/2:W/2;
-     ctx.save();ctx.translate(Math.round(ox),Math.round(H/2));ctx.rotate(-Math.PI/2);
-     ctx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round(-w/2),Math.round(-h/2),w,h);ctx.restore();
+     const ox=r.group?h/2:TW/2;
+     cx.save();cx.translate(Math.round(ox),Math.round(TH/2));cx.rotate(-Math.PI/2);
+     cx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round(-w/2),Math.round(-h/2),w,h);cx.restore();
     }else{
      const scale=direct?1:(gscale||Math.min(W/r.w,H/r.h)),w=sr.w*scale,h=sr.h*scale;
-     const oy=r.group?0:(H-h)/2;                    // 分割ページは上端に揃える
-     ctx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round((W-w)/2),Math.round(oy),w,h);
+     const oy=r.group?0:(TH-h)/2;                   // 分割ページは上端に揃える
+     cx.drawImage(srcImg,sr.x,sr.y,sr.w,sr.h,Math.round((TW-w)/2),Math.round(oy),w,h);
     }
     }finally{if(direct){direct.width=0;direct.height=0;}}
-    const data=ctx.getImageData(0,0,W,H).data;
-    const sharp=src.kind==='pdf'&&opt.sharpText!=='off';
-    pages.push(encodeGray(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither),sharp));
+    const data=cx.getImageData(0,0,TW,TH).data;
+    if(F===2){const pg=encodeGray2x(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither),Number(opt.sharpPool)||1);
+     if(pg.sharp)stats.sharp2x++;pages.push(pg);}
+    else pages.push(encodeGray(data,W,H,format,Number(opt.contrast)||1,Boolean(opt.dither),sharp));
    }
   }finally{release();}
   progress(i+1,sources.length,pages.length);
   await sleep();
  }
- return{width:W,height:H,pages,chapters,format};
+ if(canvas2){canvas2.width=0;canvas2.height=0;}
+ return{width:W,height:H,pages,chapters,format,stats,engine:'0.5.7'};
 }
 // 分冊: pages を size ページずつに分け、各巻の章リストを付け直す（巻頭には直前の章を引き継ぐ）
 function splitVolumes(pages,chapters,size){
@@ -385,5 +428,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,PAGE_W:W,PAGE_H:H};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,PAGE_W:W,PAGE_H:H};
 })(typeof window!=='undefined'?window:globalThis);

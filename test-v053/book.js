@@ -122,7 +122,7 @@ async function renderBook(book,opt={},progress=()=>{}){
      drawV(ctx,t,W-m-fs/2-c*line,m+fs/2+r*step,step,fs);r+=cells;ink=true;
     }else{
      const value=t.t==='ruby'?t.s+'（'+t.ruby+'）':t.s;
-     ctx.font=`${fs}px "Hiragino Mincho ProN",serif`;ctx.textAlign='left';ctx.textBaseline='top';
+     ctx.font=`${fs}px "Hiragino Mincho ProN",serif`;ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle='#000';
      const width=ctx.measureText(value).width;if(c+width>W-2*m&&c>0)next();
      ctx.fillText(value,m+c,m+r*step);c+=width;ink=true;
     }

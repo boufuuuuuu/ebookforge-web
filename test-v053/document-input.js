@@ -1,4 +1,4 @@
-/* EbookForge Web 0.5.6: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.5.7: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -22,6 +22,12 @@ const UNRAR_MODULE_FALLBACK='https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/+e
 const UNRAR_WASM='https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm';
 let pdfPromise=null,unrarPromise=null;
 const testDeps={};
+// iPhone の「ファイル」経由だとファイル名が %E5%88%86… のまま渡ることがあるため表示用に戻す
+function displayName(name){
+ const n=String(name||'');
+ if(!/%[0-9A-Fa-f]{2}/.test(n))return n;
+ try{return decodeURIComponent(n);}catch(_){return n;}
+}
 function fileType(name){
  const n=String(name||'').toLowerCase();
  return /\.pdf$/.test(n)?'pdf':/\.(?:rar|cbr)$/.test(n)?'rar':null;
@@ -95,8 +101,8 @@ async function fromPDF(file){
   if(doc.numPages>MAX_PDF_PAGES)err(`PDFは${MAX_PDF_PAGES}ページ以内にしてください。分割してお試しください`);
   let closed=false,rendered=0,blankRun=0,sawInk=false;
   const sources=Array.from({length:doc.numPages},(_,i)=>({
-   name:`${file.name.replace(/\.pdf$/i,'')}/${String(i+1).padStart(5,'0')}.png`,
-   archive:file.name.replace(/\.pdf$/i,''),
+   name:`${displayName(file.name).replace(/\.pdf$/i,'')}/${String(i+1).padStart(5,'0')}.png`,
+   archive:displayName(file.name).replace(/\.pdf$/i,''),
    kind:'pdf',uniformGroup:'pdf:'+file.name+':'+file.size,
    entryName:`${String(i+1).padStart(5,'0')}.png`,
    // v0.5.6: 解析用画像（open）の座標 r を、最終解像度で PDF から直接描画する。
@@ -243,7 +249,7 @@ async function fromRAR(file){
   data.set(name,Uint8Array.from(bytes));
  }
  if(data.size!==names.length)err('RAR内の一部画像を読み込めませんでした');
- const archive=file.name.replace(/\.(rar|cbr)$/i,'');
+ const archive=displayName(file.name).replace(/\.(rar|cbr)$/i,'');
  const sources=names.map(name=>({
   name:archive+'/'+name,archive,entryName:name,
   open:async()=>{
@@ -258,8 +264,110 @@ async function fromRAR(file){
  }));
  return{sources,close:async()=>data.clear()};
 }
+// v0.5.7: PDF の文字情報を取り出して、本文テキスト（章＝大きい文字の見出し）に組み直す。
+// 文字の並びは PDF に書かれた順（作成ソフトの論理順。HTML→PDF なら記述順）を使う。
+// 行の区切り：PDF.js の改行フラグ、または行位置（横書きは y、縦書きは x）が文字の大きさの半分以上変わったとき。
+function pdfPageLines(tc){
+ const styles=tc.styles||{},lines=[];let cur=null;
+ const flush=()=>{if(cur&&cur.str.trim())lines.push(cur);cur=null;};
+ for(const it of tc.items||[]){
+  if(typeof it.str!=='string')continue;
+  const t=it.transform||[1,0,0,1,0,0],size=Math.hypot(t[2],t[3])||it.height||10;
+  const vertical=!!styles[it.fontName]?.vertical,pos=vertical?t[4]:t[5];
+  // 行の進む方向の始点・終点（横書き=x、縦書き=上から下へ）。折り返しの判定に使う
+  const a0=vertical?-t[5]:t[4],a1=a0+(vertical?(it.height||0):(it.width||0));
+  if(it.str!==''){
+   if(cur&&(cur.vertical!==vertical||Math.abs(pos-cur.pos)>Math.max(size,cur.size)*0.5))flush();
+   if(!cur)cur={str:'',size,pos,vertical,chars:0,a0,a1};
+   const ascii=/[A-Za-z0-9]$/.test(cur.str)&&/^[A-Za-z0-9]/.test(it.str);
+   cur.str+=(ascii?' ':'')+it.str;cur.size=Math.max(cur.size,size);cur.chars+=it.str.length;
+   cur.a0=Math.min(cur.a0,a0);cur.a1=Math.max(cur.a1,a1);
+  }
+  if(it.hasEOL)flush();
+ }
+ flush();
+ return lines;
+}
+function linesToBook(pages,title){
+ const all=pages.flat();
+ if(!all.length)err('このPDFには文字情報がありません（スキャン画像のPDFは組み直せません）。「画像として変換」を使ってください');
+ // 本文の文字サイズ＝文字数で重み付けした中央値
+ const sizes=[];for(const l of all)for(let k=0;k<Math.min(l.chars,200);k++)sizes.push(l.size);
+ sizes.sort((a,b)=>a-b);const body=sizes[Math.floor(sizes.length/2)]||10;
+ const vertical=all.filter(l=>l.vertical).reduce((n,l)=>n+l.chars,0)*2>all.reduce((n,l)=>n+l.chars,0);
+ const chapters=[];let ch={title:'本文',text:'',pageMark:0};
+ const END=/[。．.！？!?」』）)：:]$/;
+ // 大見出しのしきい値：見出し候補（本文の1.35倍以上）の中で大きい側。候補が1種類ならそれを大見出しとする
+ const heads=[...new Set(all.filter(l=>l.size>=body*1.35).map(l=>Math.round(l.size*2)/2))].sort((a,b)=>b-a);
+ const h1=heads.length>1?Math.max(body*1.8,heads[0]*0.85):(heads[0]||Infinity);
+ let pageNo=0;
+ for(const lines of pages){
+  pageNo++;
+  if(ch.pageMark!==pageNo&&ch.text&&!/\n$/.test(ch.text))ch.text+='\n';
+  // 段落の復元：同じ大きさ・同じ書き出し位置で続く行をひとまとまり（ブロック）とし、
+  // ブロックの右端（縦書きは下端）近くまで届いている行は「折り返し」とみなして次の行とつなぐ
+  const blocks=[];
+  for(const l of lines){
+   const b=blocks[blocks.length-1],p=b&&b[b.length-1];
+   if(p&&!(l.size>=body*1.35)&&!(p.size>=body*1.35)&&Math.abs(l.size-p.size)<p.size*0.15&&
+      Math.abs(l.a0-p.a0)<=p.size*1.2&&Math.abs(l.pos-p.pos)<=p.size*2.4)b.push(l);
+   else blocks.push([l]);
+  }
+  for(const b of blocks){
+   const edge=Math.max(...b.map(l=>l.a1));
+   let para='';
+   b.forEach((l,k)=>{
+    const s=l.str.replace(/\s+/g,' ').trim();if(!s)return;
+    if(l.size>=body*1.35&&s.length<=60){
+     // 見出し直前の短いラベル行（「はじめに」「01・説明」等）は見出しの下へ移す
+     const rows=ch.text.replace(/\n+$/,'').split('\n'),last=rows[rows.length-1]||'';
+     const label=last&&last.length<=16&&!/^[■●]/.test(last)&&ch.pageMark===pageNo?last:'';
+     if(label)ch.text=rows.slice(0,-1).join('\n')+'\n';
+     if(l.size>=h1){                                    // 大見出し → 章（改ページ・目次）
+      if(ch.text.trim())chapters.push(ch);
+      ch={title:s.slice(0,90),text:'■ '+s+'\n'+(label?label+'\n':'')+'\n',pageMark:pageNo};
+     }else{                                             // 中見出し → 本文中の見出し行
+      ch.text+=(ch.text.trim()?'\n':'')+'● '+s+'\n'+(label?label+'\n':'');ch.pageMark=pageNo;
+     }
+     return;
+    }
+    const ascii=/[A-Za-z0-9]$/.test(para)&&/^[A-Za-z0-9]/.test(s);
+    para+=(para&&ascii?' ':'')+s;
+    const wrapped=k<b.length-1&&l.a1>=edge-l.size*1.5&&!END.test(s);
+    if(!wrapped){ch.text+=para+'\n';para='';ch.pageMark=pageNo;}
+   });
+   if(para)ch.text+=para+'\n';
+  }
+  ch.text+='\n';                                       // ページの区切りは空行
+ }
+ if(ch.text.trim())chapters.push(ch);
+ if(!chapters.length)err('PDFから本文を取り出せませんでした');
+ return{title,author:'',chapters,source:'pdf',vertical};
+}
+async function pdfToBook(files,progress=()=>{}){
+ const lib=await loadPDF(),assets=await pdfAssets(),pages=[];
+ let title='';
+ for(const file of files){
+  if(fileType(file.name)!=='pdf')err('「文字を組み直す」はPDFだけに使えます: '+file.name);
+  if(file.size>MAX_PDF_SIZE)err('PDFは35MB以内にしてください');
+  title=title||displayName(file.name).replace(/\.pdf$/i,'');
+  const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer()),stopAtErrors:true,isEvalSupported:false,
+   cMapUrl:assets.cMapUrl,cMapPacked:true,standardFontDataUrl:assets.standardFontDataUrl}).promise;
+  try{
+   if(doc.numPages>MAX_PDF_PAGES*3)err(`PDFは${MAX_PDF_PAGES*3}ページ以内にしてください`);
+   for(let i=1;i<=doc.numPages;i++){
+    const page=await doc.getPage(i);
+    try{pages.push(pdfPageLines(await page.getTextContent()));}finally{if(page.cleanup)page.cleanup();}
+    progress(i,doc.numPages);
+    if(i%5===0)await new Promise(ok=>setTimeout(ok,0));
+   }
+  }catch(e){if(e?.name==='PasswordException')throw Error('パスワード付きPDFは未対応です');throw e;}
+  finally{await doc.destroy();}
+ }
+ return linesToBook(pages,title);
+}
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})
