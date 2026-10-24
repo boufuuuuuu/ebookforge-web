@@ -64,7 +64,7 @@ $('manga-build').addEventListener('click',async()=>{
    fillChapters();
    libraryKey='ebookforge-manga-page:'+($('manga-title').value||'漫画');
    $('manga-preview-box').hidden=false;show(0);
-   status(`変換完了（文字を組み直し・v0.6.3）：${book.chapters.length}章・図${book.figures.length}枚 → ${result.pages.length}ページ。図は1ページずつ挿入します。XTC（白黒）で保存します。`);
+   status(`変換完了（文字を組み直し・v0.6.4）：${book.chapters.length}章・図${book.figures.length}枚 → ${result.pages.length}ページ。図は1ページずつ挿入します。XTC（白黒）で保存します。`);
    return;
   }
   sources=await EbookForgeManga.collect(raw,(i,n)=>status(`ファイルを確認中：${i}/${n}`));
@@ -129,6 +129,19 @@ $('manga-export').addEventListener('click',()=>{
  }catch(e){status('保存できませんでした：'+e.message);}
 });
 try{const v=document.createElement('p');v.className='hint';v.id='engine-version';
- v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.6.3';
+ v.textContent='読み込まれている処理プログラム：manga '+(EbookForgeManga.ENGINE||'?')+' / pdf '+(EbookForgeDocuments.ENGINE||'?')+' / 画面 0.6.4';
  document.querySelector('h1')?.after(v);}catch(_){}
+})();
+
+// v0.6.4: 図の検出の診断
+(function(){
+ const b=document.getElementById('manga-diag');if(!b)return;
+ b.addEventListener('click',async()=>{
+  const out=document.getElementById('manga-diag-out'),f=Array.from(document.getElementById('manga-files').files||[]).find(x=>/\.pdf$/i.test(x.name));
+  if(!f){out.textContent='PDFを選んでください';return;}
+  b.disabled=true;out.textContent='診断しています…';
+  try{out.textContent=await EbookForgeDocuments.diagnosePDFPage(f,+document.getElementById('manga-diag-page').value||1);}
+  catch(e){out.textContent='診断できませんでした：'+(e&&e.message||e);}
+  finally{b.disabled=false;}
+ });
 })();
