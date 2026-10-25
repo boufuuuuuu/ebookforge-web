@@ -1,4 +1,4 @@
-/* EbookForge Web manga conversion v0.6.0 (client-side, no protected-site scraping).
+/* EbookForge Web manga conversion v0.6.6 (client-side, no protected-site scraping).
  * Image/CBZ/ZIP -> fixed-layout X3 XTC (1-bit) / XTCH (2-bit).
  */
 (function(g){
@@ -235,7 +235,38 @@ function encodeGray2x(p2,width,height,format='xtc',contrast=1,dither=false,pool=
  return out;
 }
 // v0.6.0: 図（写真・画面キャプチャ）用の白黒化。濃淡は順序ディザで残し、図の中の文字は適応二値化で黒く保つ
+// v0.6.6: 写真かどうか。白い余白を除いた画素が広い面積を占め、明るさが多くの段階に分布していれば写真とみなす
+function isPhoto(pixels,width,height){
+ const n=width*height,hist=new Uint32Array(16);let ink=0,mid=0;
+ for(let i=0;i<n;i+=2){const p=i*4,g=pixels[p]*.299+pixels[p+1]*.587+pixels[p+2]*.114;
+  if(g>=250)continue;ink++;hist[g>>4]++;if(g>40&&g<215)mid++;}
+ if(ink<n/2*0.25)return false;                               // 線と文字だけの図（大半が白）は写真ではない
+ const bins=[...hist].filter(c=>c>=ink*0.015).length;
+ return bins>=7&&mid>=ink*0.4;
+}
+// v0.6.6: 写真は誤差拡散（Floyd–Steinberg・往復走査）で濃淡を点の密度に置き換える。明るさは2%〜98%で引き伸ばす
+function encodePhoto(pixels,width,height){
+ const n=width*height,g=new Float32Array(n),hist=new Uint32Array(256);let cnt=0;
+ for(let i=0;i<n;i++){const p=i*4,v=pixels[p]*.299+pixels[p+1]*.587+pixels[p+2]*.114;g[i]=v;if(v<250){hist[v|0]++;cnt++;}}
+ let lo=0,hi=255,acc=0;
+ for(let v=0;v<256;v++){acc+=hist[v];if(acc>=cnt*0.02){lo=v;break;}}
+ acc=0;for(let v=255;v>=0;v--){acc+=hist[v];if(acc>=cnt*0.02){hi=v;break;}}
+ if(hi-lo<32){lo=0;hi=255;}
+ for(let i=0;i<n;i++)if(g[i]<250)g[i]=Math.max(0,Math.min(255,(g[i]-lo)*255/(hi-lo)));
+ const stride=Math.ceil(width/8),out=new Uint8Array(stride*height).fill(255);
+ for(let y=0;y<height;y++){
+  const rev=y&1;
+  for(let j=0;j<width;j++){
+   const x=rev?width-1-j:j,i=y*width+x,o=g[i],v=o<128?0:255,e=o-v,d=rev?-1:1;
+   if(!v)out[y*stride+(x>>3)]&=~(128>>(x&7));
+   if(x+d>=0&&x+d<width)g[i+d]+=e*7/16;
+   if(y+1<height){if(x-d>=0&&x-d<width)g[i+width-d]+=e*3/16;g[i+width]+=e*5/16;if(x+d>=0&&x+d<width)g[i+width+d]+=e/16;}
+  }
+ }
+ return out;
+}
 function encodeFigure(pixels,width,height){
+ if(isPhoto(pixels,width,height))return encodePhoto(pixels,width,height);
  // 暗い文字（周りより暗い）→黒、明るい文字（色付きボタン上の白文字など、周りより明るい）→白、
  // それ以外の面は順序ディザで濃淡を残す
  const mask=textMask(pixels,width,height),light=lightMask(pixels,width,height);
@@ -447,7 +478,7 @@ async function render(sources,opt,progress=()=>{},cancel=()=>false){
   await sleep();
  }
  if(canvas2){canvas2.width=0;canvas2.height=0;}
- return{width:W,height:H,pages,chapters,format,stats,engine:'0.6.0'};
+ return{width:W,height:H,pages,chapters,format,stats,engine:'0.6.6'};
 }
 // 分冊: pages を size ページずつに分け、各巻の章リストを付け直す（巻頭には直前の章を引き継ぐ）
 function splitVolumes(pages,chapters,size){
@@ -464,5 +495,5 @@ function splitVolumes(pages,chapters,size){
  return vols;
 }
 g.EbookForgeManga={natural,planRegions,encodeGray,collect,render,chapterKey,decodeBlob,sanitizeName,
- pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,encodeFigure,PAGE_W:W,PAGE_H:H,ENGINE:'0.6.0'};
+ pageBufferBytes,splitVolumes,snapCut,planPdfSplit,textMask,encodeGray2x,encodeFigure,isPhoto,encodePhoto,PAGE_W:W,PAGE_H:H,ENGINE:'0.6.6'};
 })(typeof window!=='undefined'?window:globalThis);

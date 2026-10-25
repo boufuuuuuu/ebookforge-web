@@ -1,4 +1,4 @@
-/* EbookForge Web 0.6.4: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.6.6: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -402,7 +402,7 @@ function pathShape(OPS,ops,co){
 }
 // v0.6.3: 描画結果から図を探す。文字行と既知の図を消し、濃い画素（輝度200未満）の塊を4px単位のマスで連結する。
 // 上下に並ぶ長い線（概念図の点線など）は、横方向に半分以上重なり、間隔がページ高さの4%以内ならつなぐ。
-async function inkFigureRects(page,vb,tRects,known,hasText,dbg=null){
+async function inkFigureRects(page,vb,tRects,known,hasText,dbg=null,frames=[]){
  const pw=vb[2]-vb[0],ph=vb[3]-vb[1],s=Math.min(1,480/pw),vp=page.getViewport({scale:s});
  const W=Math.max(1,Math.round(vp.width)),H=Math.max(1,Math.round(vp.height));
  const c=document.createElement('canvas');c.width=W;c.height=H;
@@ -430,13 +430,19 @@ async function inkFigureRects(page,vb,tRects,known,hasText,dbg=null){
   comps.push({b:[x0,y0,x1+1,y1+1],px,n:1,cells,full});
  }
  const gapV=Math.ceil(GH*0.04);
+ // v0.6.5: 枠（文字入りの箱）をマス目の座標に直す。同じ枠の中に並ぶ線は、間隔が広くても1つの図にまとめる
+ const fr=frames.map(b=>{const v=vp.convertToViewportRectangle(b);
+  return[Math.floor(Math.min(v[0],v[2])/C)-1,Math.floor(Math.min(v[1],v[3])/C)-1,Math.ceil(Math.max(v[0],v[2])/C)+1,Math.ceil(Math.max(v[1],v[3])/C)+1];});
+ const inFrame=(A,B)=>fr.some(f=>f[0]<=Math.min(A[0],B[0])&&f[1]<=Math.min(A[1],B[1])&&f[2]>=Math.max(A[2],B[2])&&f[3]>=Math.max(A[3],B[3]));
  for(let merged=true;merged;){merged=false;
   for(let a=0;a<comps.length&&!merged;a++)for(let b=a+1;b<comps.length&&!merged;b++){
    const A=comps[a].b,B=comps[b].b;
    const touch=A[0]-1<=B[2]&&B[0]-1<=A[2]&&A[1]-1<=B[3]&&B[1]-1<=A[3];
    const ov=Math.min(A[2],B[2])-Math.max(A[0],B[0]),nar=Math.min(A[2]-A[0],B[2]-B[0]);
    const vg=Math.max(A[1],B[1])-Math.min(A[3],B[3]);
-   const stack=nar>=GW*0.1&&ov>=nar*0.5&&vg<=gapV;
+   // 枠の外では、細い線（高さ2マス以下：見出しの下線など）を上下につながない。枠の中なら点線どうしもつなぐ
+   const thin=A[3]-A[1]<=2||B[3]-B[1]<=2;
+   const stack=nar>=GW*0.1&&ov>=nar*0.5&&(vg<=gapV&&!thin||vg<=GH*0.2&&inFrame(A,B));
    if(touch||stack){comps[a]={b:[Math.min(A[0],B[0]),Math.min(A[1],B[1]),Math.max(A[2],B[2]),Math.max(A[3],B[3])],px:comps[a].px+comps[b].px,n:comps[a].n+comps[b].n,cells:comps[a].cells+comps[b].cells,full:comps[a].full+comps[b].full};comps.splice(b,1);merged=true;}
   }
  }
@@ -456,6 +462,26 @@ async function inkFigureRects(page,vb,tRects,known,hasText,dbg=null){
   out.push([Math.min(p0[0],p1[0]),Math.min(p0[1],p1[1]),Math.max(p0[0],p1[0]),Math.max(p0[1],p1[1])]);
  }
  return out;
+}
+// v0.6.6: 文字で描いた図・アスキーアート（AA）。組み直すと崩れるので、元のページから画像で切り出す。
+// 記号の割合が高い行が2行以上続くまとまりを探す。罫線素片（┌─┐│等）を含む行は強い手がかりとする。
+const AA_STRONG=/[─-▟]/;
+const AA_CHAR=/[─-▟←-⇿∀-⋿■-◿Ͱ-ϿЀ-ӿ｡-ﾟ\/\\|_~^=+*<>()'`\-:;／＼｜＿￣～＾＝＋＊＜＞（）：；´｀゜ヽヾ〜‾]/;
+function aaScore(str){
+ const ch=[...str].filter(c=>!/\s/.test(c));if(!ch.length)return 0;
+ return ch.filter(c=>AA_CHAR.test(c)).length/ch.length;
+}
+function aaBlocks(lines){
+ const idx=lines.map((l,k)=>k).filter(k=>!lines[k].vertical&&lines[k].str&&(aaScore(lines[k].str)>=0.34||AA_STRONG.test(lines[k].str)||/^[\x21-\x7e]{1,2}$/.test(lines[k].str.replace(/\s/g,''))))
+  .sort((a,b)=>lines[b].pos-lines[a].pos);
+ const blocks=[];
+ for(const k of idx){
+  const l=lines[k],b=blocks.find(b=>{const p=lines[b[b.length-1]];
+   return p.pos-l.pos>0&&p.pos-l.pos<=Math.max(p.size,l.size)*2.2&&Math.min(p.a1,l.a1)>Math.max(p.a0,l.a0);});
+  if(b)b.push(k);else blocks.push([k]);
+ }
+ // 1〜2文字だけの英数字・記号の行（矢印の v 、縦線の | など）は、図の行と続いているときだけ図の一部にする
+ return blocks.filter(b=>b.some(k=>aaScore(lines[k].str)>=0.34||AA_STRONG.test(lines[k].str))).filter(b=>b.length>=2&&(b.some(k=>AA_STRONG.test(lines[k].str))||b.reduce((n,k)=>n+aaScore(lines[k].str),0)/b.length>=0.6));
 }
 async function pageFigureRects(lib,page,lines=[],debug=null,opt={}){
  const OPS=lib.OPS,ol=await page.getOperatorList(),vb=page.view;  // view=[x0,y0,x1,y1]
@@ -568,21 +594,34 @@ async function pageFigureRects(lib,page,lines=[],debug=null,opt={}){
   if(w<pw*0.15||h<ph*0.03||w*h<PA*0.015)continue;          // 小さいアイコン・細い帯は図にしない
   figs.push({r,raster:false});
  }
+ // --- (3') 文字で描いた図・AA（v0.6.6）：その行だけを図にする（周りの本文は飲み込まない）
+ const aaUsed=[];
+ for(const b of aaBlocks(lines)){
+  const r=b.map(k=>tRects[k]).reduce(rUnion),m=Math.max(...b.map(k=>lines[k].size))*0.4;
+  figs.push({r:[r[0]-m,r[1]-m,r[2]+m,r[3]+m],raster:false,aa:true});aaUsed.push(...b);
+ }
  // --- (4) 最後の網（v0.6.3）：ページを実際に描き、文字と既に見つけた図を白で消して、残った「目に見えるもの」の塊を図とする。
  //     CSS の背景画像（PDF内では「模様」）、図形化された文字、特殊な描き方の図など、(1)(2) で拾えないものを拾う。
  if(opt.ink!==false&&typeof document!=='undefined'&&page.render){
   const idbg=debug?(debug.ink=[]):null;
-  try{for(const r of await inkFigureRects(page,vb,tRects,figs.map(f=>f.r),hasText,idbg))figs.push({r,raster:false,ink:true});}
+  // 図の候補を囲める枠：文字入りの箱のうち、ページの3割未満のもの（ページ背景・本文の段は除く）
+  const frames=boxes.filter(b=>rArea(b)<PA*0.3);
+  // 描画で見つけた図は、それを丸ごと囲む一番小さい枠（図の6倍の面積まで）にだけ広げる。接するだけの箱には広げない
+  const enclose=r=>{let best=null;for(const f of frames){
+    if(f[0]<=r[0]+2&&f[1]<=r[1]+2&&f[2]>=r[2]-2&&f[3]>=r[3]-2&&rArea(f)<=rArea(r)*6&&(!best||rArea(f)<rArea(best)))best=f;}
+   return best?rUnion(r,best):r;};
+  try{for(const r of await inkFigureRects(page,vb,tRects,figs.map(f=>f.r),hasText,idbg,frames))figs.push({r:enclose(r),raster:false,ink:true});}
   catch(e){if(debug)debug.inkError=String(e&&e.message||e);}
  }else if(debug)debug.inkError='描画による検出を実行できない環境';
  if(debug)Object.assign(debug,{images,shapes,boxes,groups:groups.map(g=>({r:g.r,n:g.items.length,items:g.items}))});
  // ベクター図に重なる文字（ラベル）を図に含め、本文から外す。1回だけ判定し、段落を連鎖的に飲み込まない
- const used=new Set();
+ const used=new Set(aaUsed);
+ const bodySize=(()=>{const z=lines.map(l=>l.size).sort((x,y)=>x-y);return z.length?z[Math.floor(z.length/2)]:10;})();
  for(const f of figs){
-  if(f.raster)continue;                                     // 写真の上下の本文・キャプションは本文に残す
+  if(f.raster||f.aa)continue;                               // 写真の上下の本文・キャプション、AAの前後の本文は本文に残す
   const base=f.r;let r=base;
   tRects.forEach((t,k)=>{
-   if(used.has(k))return;
+   if(used.has(k)||lines[k].size>=bodySize*1.5)return;      // 見出しの大きさの文字は図に含めない（本文に必ず残す）
    const m=Math.max(2,lines[k].size*0.8);
    // 文字幅の見積りが実際より広いことがある（太字・代替フォント）ので、図の枠から大きくはみ出す分は切る
    if(rHit(t,base,m)){used.add(k);r=rUnion(r,[Math.max(t[0],base[0]-m*3),t[1],Math.min(t[2],base[2]+m*3),t[3]]);}
@@ -599,26 +638,39 @@ async function pageFigureRects(lib,page,lines=[],debug=null,opt={}){
  // 余白を少し付ける
  const pad=Math.min(pw,ph)*0.01;
  out=out.map(r=>[Math.max(vb[0],r[0]-pad),Math.max(vb[1],r[1]-pad),Math.min(vb[2],r[2]+pad),Math.min(vb[3],r[3]+pad)]);
- if(debug)debug.figs=figs.map(f=>({r:f.r,kind:f.raster?'画像':f.ink?'描画':'図形'}));
+ if(debug)debug.figs=figs.map(f=>({r:f.r,kind:f.raster?'画像':f.aa?'文字の図':f.ink?'描画':'図形'}));
  return{rects:out,labels:used};
 }
 // 図の範囲を 528×792 の1ページに描く（横長の図は opt.rotateWide のとき90°回して大きく表示）
 async function renderFigurePage(page,rect,opt){
- const W=528,H=792,M=12,rw=rect[2]-rect[0],rh=rect[3]-rect[1];
+ // v0.6.6: 2倍の解像度で描いてから縮小する。写真は4画素の平均、それ以外（線・文字・図）は4画素で一番濃い画素を残し、
+ // 細い線（罫線文字の ─ 、薄い枠など）が白に飛ばないようにする
+ const W=528,H=792,M=12,K=2,rw=rect[2]-rect[0],rh=rect[3]-rect[1];
  const rotate=!!opt.rotateWide&&rw/rh>1.3;
- const bw=rotate?H-2*M:W-2*M,bh=rotate?W-2*M:H-2*M,s=Math.min(bw/rw,bh/rh);
+ const bw=rotate?H-2*M:W-2*M,bh=rotate?W-2*M:H-2*M,s=Math.min(bw/rw,bh/rh)*K;
  const vp=page.getViewport({scale:s}),vr=vp.convertToViewportRectangle(rect);
  const vx=Math.min(vr[0],vr[2]),vy=Math.min(vr[1],vr[3]);
  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(rw*s));c.height=Math.max(1,Math.round(rh*s));
  const cx=c.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,c.width,c.height);
  await page.render({canvasContext:cx,viewport:vp,background:'rgb(255,255,255)',transform:[1,0,0,1,-vx,-vy]}).promise;
- const out=document.createElement('canvas');out.width=W;out.height=H;
- const ox=out.getContext('2d',{willReadFrequently:true});ox.fillStyle='#fff';ox.fillRect(0,0,W,H);
- if(rotate){ox.save();ox.translate(W/2,H/2);ox.rotate(-Math.PI/2);ox.drawImage(c,-c.width/2,-c.height/2);ox.restore();}
- else ox.drawImage(c,Math.round((W-c.width)/2),Math.round((H-c.height)/2));
- const data=ox.getImageData(0,0,W,H).data;
+ const W2=W*K,H2=H*K,out=document.createElement('canvas');out.width=W2;out.height=H2;
+ const ox=out.getContext('2d',{willReadFrequently:true});ox.fillStyle='#fff';ox.fillRect(0,0,W2,H2);
+ if(rotate){ox.save();ox.translate(W2/2,H2/2);ox.rotate(-Math.PI/2);ox.drawImage(c,-c.width/2,-c.height/2);ox.restore();}
+ else ox.drawImage(c,Math.round((W2-c.width)/2),Math.round((H2-c.height)/2));
+ const big=ox.getImageData(0,0,W2,H2).data;
  c.width=c.height=0;out.width=out.height=0;
- return g.EbookForgeManga.encodeFigure(data,W,H);
+ const avg=new Uint8ClampedArray(W*H*4),dark=new Uint8ClampedArray(W*H*4);
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+  const o=(y*W+x)*4;let r=0,gg=0,bb=0,best=1e9,bi=0;
+  for(let dy=0;dy<K;dy++)for(let dx=0;dx<K;dx++){
+   const q=((y*K+dy)*W2+x*K+dx)*4;r+=big[q];gg+=big[q+1];bb+=big[q+2];
+   const l=big[q]*.299+big[q+1]*.587+big[q+2]*.114;if(l<best){best=l;bi=q;}
+  }
+  avg[o]=r/(K*K);avg[o+1]=gg/(K*K);avg[o+2]=bb/(K*K);avg[o+3]=255;
+  dark[o]=big[bi];dark[o+1]=big[bi+1];dark[o+2]=big[bi+2];dark[o+3]=255;
+ }
+ const M2=g.EbookForgeManga;
+ return M2.encodeFigure(M2.isPhoto(avg,W,H)?avg:dark,W,H);
 }
 // v0.6.4: 図の検出の診断。指定ページで何が描かれ、何が理由で図から外れたかを文章で返す（PDFを送らずに原因を調べるため）
 async function diagnosePDFPage(file,pageNo){
@@ -627,7 +679,7 @@ async function diagnosePDFPage(file,pageNo){
   cMapUrl:assets.cMapUrl,cMapPacked:true,standardFontDataUrl:assets.standardFontDataUrl}).promise;
  try{
   const n=Math.min(Math.max(1,pageNo|0),doc.numPages),page=await doc.getPage(n),vb=page.view;
-  out.push(`EbookForge 図の診断 v0.6.4 / ${displayName(file.name)} / ${n}/${doc.numPages}ページ / 大きさ ${Math.round(vb[2]-vb[0])}×${Math.round(vb[3]-vb[1])}`);
+  out.push(`EbookForge 図の診断 v0.6.6 / ${displayName(file.name)} / ${n}/${doc.numPages}ページ / 大きさ ${Math.round(vb[2]-vb[0])}×${Math.round(vb[3]-vb[1])}`);
   const tc=await page.getTextContent(),lines=pdfPageLines(tc);
   const empty=(tc.items||[]).filter(it=>typeof it.str==='string'&&it.str.trim()==='').length;
   out.push(`文字：部品${(tc.items||[]).length}（空${empty}）→ 行${lines.length}`);
@@ -697,7 +749,7 @@ async function pdfToBook(files,progress=()=>{},opt={}){
  const book=linesToBook(pages,title);book.figures=figures;return book;
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,diagnosePDFPage,ENGINE:'0.6.4',
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,diagnosePDFPage,aaBlocks,aaScore,ENGINE:'0.6.6',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})
