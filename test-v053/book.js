@@ -1,4 +1,4 @@
-/* EbookForge Web v0.6.7: chapter extraction, Kakuyomu/Narou notation, 1bit XTC rendering. */
+/* EbookForge Web v0.8.1: chapter extraction, Kakuyomu/Narou notation, 1bit XTC rendering. */
 (function(g){
 'use strict';
 const te=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
@@ -125,20 +125,36 @@ function tokenize(s){
 // v0.5.9: 書体・太さ・白黒化のしきい値を renderBook のオプションで変更可能に（既定は従来どおり明朝・128）
 const MINCHO='"Hiragino Mincho ProN","Yu Mincho",serif';
 let FAM=MINCHO,WT='',THR=128;
+const ROT=new Set(Array.from('ー－―‐‑–—～〜…‥＝=｜'));
 function drawV(ctx,t,x,y,step,size){
  ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`${WT}${size}px ${FAM}`;
  if(t.t==='ruby'){
   const base=Array.from(t.s);base.forEach((c,i)=>drawV(ctx,{t:'char',s:c},x,y+i*step,step,size));
-  const chars=Array.from(t.ruby),fs=Math.max(9,Math.floor(size*.46)),d=Math.min(step*.6,base.length*step/Math.max(chars.length,1));
-  ctx.font=`${fs}px serif`;const origin=y+(base.length*step-chars.length*d)/2;
-  chars.forEach((c,i)=>ctx.fillText(c,x+size*.68,origin+(i+.5)*d));return;
+  // v0.8.1: ルビは本文の約半分（最低11px）の太めのゴシックで描く（細い明朝の小さい字は白黒2値でつぶれるため）
+  const chars=Array.from(t.ruby),fs=Math.max(11,Math.round(size*.5)),d=Math.min(fs*1.02,Math.max(fs*.8,base.length*step/Math.max(chars.length,1)));
+  ctx.font=`600 ${fs}px "Hiragino Sans","Yu Gothic","Noto Sans CJK JP",sans-serif`;const origin=y+(base.length*step-chars.length*d)/2;
+  chars.forEach((c,i)=>{const cy=origin+(i+.5)*d;
+   if(ROT.has(c)){ctx.save();ctx.translate(x+size*.74,cy);ctx.rotate(Math.PI/2);ctx.fillText(c,0,0);ctx.restore();}
+   else ctx.fillText(c,x+size*.74,cy);});return;
  }
  // 1〜2桁の英数字は立てたまま（縦中横）。長い英単語を1字ずつに分けたもの（rot）だけ横倒しにする
  if(!t.rot&&/^[A-Za-z0-9]{1,2}$/.test(t.s)){ctx.font=`${Math.round(size*.74)}px sans-serif`;ctx.fillText(t.s,x,y);return;}
  if(/[A-Za-z0-9]/.test(t.s)){ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/2);ctx.fillText(t.s,0,0);ctx.restore();return;}
- const forms={'ー':'｜','「':'﹁','」':'﹂','『':'﹃','』':'﹄','（':'︵','）':'︶','《':'︽','》':'︾'};
+ // v0.8.1: 長音「ー」・ダッシュ・波線・三点リーダーは、記号に置き換えず字そのものを90°回す（本文と同じ太さで、縦書き本来の形になる）
+ if(ROT.has(t.s)){ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/2);ctx.fillText(t.s,0,0);ctx.restore();if(t.em){ctx.beginPath();ctx.arc(x+size*.68,y,Math.max(1.6,size*.09),0,Math.PI*2);ctx.fill();}return;}
+ const forms={'「':'﹁','」':'﹂','『':'﹃','』':'﹄','（':'︵','）':'︶','《':'︽','》':'︾','［':'﹇','］':'﹈','【':'︻','】':'︼','〈':'︿','〉':'﹀'};
  ctx.fillText(forms[t.s]||t.s,x+('、。'.includes(t.s)?size*.2:0),y-('、。'.includes(t.s)?size*.2:0));
  if(t.em){ctx.beginPath();ctx.arc(x+size*.68,y,Math.max(1.6,size*.09),0,Math.PI*2);ctx.fill();}   // 傍点（右側の黒丸）
+}
+// v0.8.1: 2倍の大きさで描いたページを、2×2画素の平均の濃さで1bitにする（細い線が白に飛ばない）
+function pack2x(ctx,W,H,thr){
+ const pix=ctx.getImageData(0,0,W*2,H*2).data,W2=W*2,stride=Math.ceil(W/8),data=new Uint8Array(stride*H);data.fill(255);
+ const lum=i=>pix[i]*.299+pix[i+1]*.587+pix[i+2]*.114;
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+  const a=((y*2)*W2+x*2)*4,b=a+W2*4;
+  if((lum(a)+lum(a+4)+lum(b)+lum(b+4))/4<thr)data[y*stride+(x>>3)]&=~(128>>(x&7));
+ }
+ return data;
 }
 function pack(ctx,W,H){
  const pix=ctx.getImageData(0,0,W,H).data,stride=Math.ceil(W/8),data=new Uint8Array(stride*H);data.fill(255);
@@ -168,11 +184,12 @@ async function renderBookInner(book,opt={},progress=()=>{}){
  const W=528,H=792,v=opt.vertical!==false,fs=Number(opt.font)||22,m=Number(opt.margin)||30,spacing=Number(opt.spacing)||1.45;
  if(fs<14||fs>40||m<12||m>90||spacing<1.05||spacing>2.3)throw Error('組版設定が不正です');
  const step=Math.ceil(fs*spacing),line=Math.ceil(fs*(spacing+.15)),rows=Math.floor((H-2*m)/step),cols=Math.floor((W-2*m)/line);
- const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
- const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+ const canvas=document.createElement('canvas');canvas.width=W*2;canvas.height=H*2;
+ const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.setTransform(2,0,0,2,0,0);ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+ const thr2=Number(opt.inkThreshold)?Math.min(200,Number(opt.inkThreshold)+25):170;      // 2倍描画の平均の濃さで判定するしきい値
  let pages=[],chapters=[],r=0,c=0,ink=false;
  function reset(){ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);ctx.fillStyle='#000';r=0;c=0;ink=false;}
- function save(force=false){if(ink||force){pages.push(pack(ctx,W,H));if(pages.length>900)throw Error('900ページを超えています');}reset();}
+ function save(force=false){if(ink||force){pages.push(pack2x(ctx,W,H,thr2));if(pages.length>900)throw Error('900ページを超えています');}reset();}
  function next(){if(v){c++;r=0;if(c>=cols)save();}else{r++;c=0;if(r>=rows)save();}}
  const selected=book.chapters.filter(ch=>ch.selected!==false);if(!selected.length)throw Error('章を選んでください');
  const close=new Set(Array.from('、。，）」』】ぁぃぅぇぉっゃゅょ')),open=new Set(Array.from('（「『【'));

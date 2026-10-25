@@ -172,7 +172,8 @@ $('book-build').addEventListener('click',async()=>{
    result=await EbookForgeBook.renderBook(book,{
     vertical:$('direction').value==='vertical',font:Number($('book-size').value),
     margin:Number($('book-margin').value),spacing:Number($('book-spacing').value),
-    parenRuby:!!($('book-paren-ruby')&&$('book-paren-ruby').checked)},
+    parenRuby:!!($('book-paren-ruby')&&$('book-paren-ruby').checked),
+    ...($('book-font')&&$('book-font').value==='gothic'?{fontFamily:'"Hiragino Sans","Yu Gothic","Noto Sans CJK JP",sans-serif',fontWeight:500}:{})},
     (i,n)=>msg('book-status',`章 ${i}/${n}`));
   }
   book.title=$('book-title').value||book.title;book.author=$('book-author').value||'';
