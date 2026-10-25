@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>カクヨム中継サーバーの作り方 - EbookForge Web</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#1d2b3a;--sub:#5b6875;--line:#d5dbe1;--accent:#1f4e8c}
+@media (prefers-color-scheme:dark){:root{--bg:#12171d;--card:#1b232c;--ink:#e6edf3;--sub:#9fb0bf;--line:#2e3a46;--accent:#7fb0ff}}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,"Hiragino Sans",sans-serif}
+main{max-width:720px;margin:0 auto;padding:16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+h1{font-size:22px;margin:8px 0}h2{font-size:18px;margin:4px 0 8px}
+ol{padding-left:1.3em}li{margin:6px 0}code{background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px}
+textarea{width:100%;box-sizing:border-box;height:220px;font:12px/1.4 ui-monospace,Menlo,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px}
+button{font:inherit;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 14px;margin:6px 6px 0 0}
+.note{color:var(--sub);font-size:14px}.key{font:16px ui-monospace,Menlo,monospace;word-break:break-all}
+a{color:var(--accent)}
+</style></head><body><main>
+<p><a href="./">← EbookForge Web に戻る</a></p>
+<h1>カクヨム中継サーバーの作り方</h1>
+<p class="note">EbookForge Web はブラウザの中だけで動くため、ブラウザの制限でカクヨムのページを直接読めません。あなた専用の小さな中継サーバー（Cloudflare Workers・無料枠）を1つ作ると、作品URLを貼るだけで取り込めるようになります。iPhoneのSafariだけで作れます（10分ほど）。</p>
+
+<section><h2>1. 合言葉を作る</h2>
+<p>中継サーバーを他人に使われないための合言葉です。下のボタンで作り、メモアプリ等に控えてください。</p>
+<button id="gen" type="button">合言葉を作る</button><button id="copykey" type="button" hidden>合言葉をコピー</button>
+<p class="key" id="key"></p></section>
+
+<section><h2>2. Cloudflare に登録する</h2>
+<ol><li><a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">Cloudflare の登録ページ</a>でメールアドレスとパスワードを入れて登録し、届いた確認メールのリンクを開きます（無料）。</li></ol></section>
+
+<section><h2>3. Worker（中継サーバー）を作る</h2>
+<ol>
+<li>Cloudflare の画面で「Workers &amp; Pages」→「作成（Create）」→「Worker を作成（Create Worker）」を選びます。</li>
+<li>名前を入れて（例：<code>ef-kakuyomu</code>）「デプロイ（Deploy）」を押します。</li>
+<li>「コードを編集（Edit code）」を開き、最初から入っているコードを<strong>全部消して</strong>、下の「中継サーバーのコード」を貼り付け、「デプロイ（Deploy）」を押します。</li>
+</ol>
+<p><button id="copycode" type="button">中継サーバーのコードをコピー</button></p>
+<textarea id="code" readonly>読み込み中…</textarea>
+<p class="note">コードは <a href="worker/kakuyomu-relay.js" target="_blank">worker/kakuyomu-relay.js</a> と同じものです。カクヨムの作品ページと話のページ以外は取りに行かず、取得した本文を保存しません。</p></section>
+
+<section><h2>4. 合言葉を登録する</h2>
+<ol>
+<li>作った Worker の「設定（Settings）」→「変数とシークレット（Variables and Secrets）」→「追加（Add）」を押します。</li>
+<li>種類（Type）は「シークレット（Secret）」、名前（Variable name）は <code>KEY</code>、値（Value）に 1. で作った合言葉を貼り、「デプロイ（Deploy）」を押します。</li>
+</ol>
+<p class="note">EbookForge Web を <code>https://boufuuuuuu.github.io</code> 以外の場所で使う場合だけ、もう1つ変数 <code>ALLOW_ORIGIN</code>（値：そのページの <code>https://〜</code> の部分）を追加してください。</p></section>
+
+<section><h2>5. アプリに設定する</h2>
+<ol>
+<li>Worker の画面に表示されるURL（<code>https://ef-kakuyomu.〇〇.workers.dev</code>）をコピーします。</li>
+<li>EbookForge Web の「③ 本を読み込む」→「カクヨムの作品URLから取り込む」を開き、「中継サーバーのURL」にそのURL、「合言葉」に 1. の合言葉を入れます。</li>
+<li>カクヨムの作品URLを貼って「取り込む」を押します。1話あたり約1.5秒かかります（カクヨムに負荷をかけないため）。</li>
+</ol></section>
+
+<section><h2>うまくいかないとき</h2>
+<ul>
+<li>「合言葉が違います」：4. の名前が <code>KEY</code> になっているか、値に余分な空白が入っていないか確認してください。</li>
+<li>「中継サーバーに接続できませんでした」：URLが <code>https://</code> で始まっているか、3. でデプロイしたかを確認してください。</li>
+<li>「目次を読み取れませんでした」「本文の場所を見つけられませんでした」：カクヨムのページの作りが変わった可能性があります。表示された文をそのまま開発者に知らせてください。</li>
+</ul>
+<p class="note">Cloudflare の画面の文言は変わることがあります。本文は私的利用の範囲で使い、他人に渡さないでください。小説家になろうは利用規約で自動取得が禁止されているため対象外です。</p></section>
+</main>
+<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ fetch('worker/kakuyomu-relay.js',{cache:'no-store'}).then(r=>{if(!r.ok)throw 0;return r.text();})
+  .then(t=>{$('code').value=t;}).catch(()=>{$('code').value='コードを読み込めませんでした。worker/kakuyomu-relay.js を開いてコピーしてください。';});
+ async function copy(text,btn){
+  try{await navigator.clipboard.writeText(text);}catch(_){const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();}
+  const o=btn.textContent;btn.textContent='コピーしました';setTimeout(()=>btn.textContent=o,1500);
+ }
+ $('copycode').addEventListener('click',e=>copy($('code').value,e.currentTarget));
+ $('gen').addEventListener('click',()=>{
+  const a=new Uint8Array(18);crypto.getRandomValues(a);
+  const k=Array.from(a,b=>'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'[b%57]).join('');
+  $('key').textContent=k;$('copykey').hidden=false;
+ });
+ $('copykey').addEventListener('click',e=>copy($('key').textContent,e.currentTarget));
+})();
+</script>
+</body></html>

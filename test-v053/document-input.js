@@ -1,4 +1,4 @@
-/* EbookForge Web 0.6.6: PDF and RAR/CBR adapters.
+/* EbookForge Web 0.8.0: PDF and RAR/CBR adapters.
  * Files are processed inside the browser. Third-party render/extractor engines
  * are fetched only when the matching file type is used.
  * PDF.js: Apache 2.0; node-unrar-js: MIT / UnRAR upstream restrictions apply.
@@ -679,7 +679,7 @@ async function diagnosePDFPage(file,pageNo){
   cMapUrl:assets.cMapUrl,cMapPacked:true,standardFontDataUrl:assets.standardFontDataUrl}).promise;
  try{
   const n=Math.min(Math.max(1,pageNo|0),doc.numPages),page=await doc.getPage(n),vb=page.view;
-  out.push(`EbookForge 図の診断 v0.6.6 / ${displayName(file.name)} / ${n}/${doc.numPages}ページ / 大きさ ${Math.round(vb[2]-vb[0])}×${Math.round(vb[3]-vb[1])}`);
+  out.push(`EbookForge 図の診断 v0.8.0 / ${displayName(file.name)} / ${n}/${doc.numPages}ページ / 大きさ ${Math.round(vb[2]-vb[0])}×${Math.round(vb[3]-vb[1])}`);
   const tc=await page.getTextContent(),lines=pdfPageLines(tc);
   const empty=(tc.items||[]).filter(it=>typeof it.str==='string'&&it.str.trim()==='').length;
   out.push(`文字：部品${(tc.items||[]).length}（空${empty}）→ 行${lines.length}`);
@@ -697,6 +697,123 @@ async function diagnosePDFPage(file,pageNo){
   if(page.cleanup)page.cleanup();
  }finally{await doc.destroy();}
  return out.join('\n');
+}
+// v0.8.0: 小説家になろう公式の縦書きPDF（ヒナプロジェクト「ToriiHina no PDF Maker」製）を、章・ルビ付きの本に戻す。
+// PDFは列（縦の1行）ごとに1つの文字列で記録されている。本文・話タイトル（別の書体）・ルビ（本文の半分の大きさ）を書体と大きさで見分け、
+// 列の位置から改行・空行・字下げを、列が下端まで埋まっているかで行の折り返し（次の列・次のページへの続き）を復元する。
+// ページ番号・表紙・発行情報（横書き）は捨てる。ルビはカクヨム記法（｜漢字《かな》、傍点は《《》》）に直して組版に渡す。
+const mode=arr=>{const m=new Map();let best=null,n=0;for(const v of arr){const c=(m.get(v)||0)+1;m.set(v,c);if(c>n){n=c;best=v;}}return best;};
+const KANJI_RE=/[㐀-䶿一-鿿豈-﫿々〆〇ヶ]/;
+function isNarouPdfInfo(info){return /ToriiHina/i.test(String(info&&info.Creator||''))||/ヒナプロジェクト/.test(String(info&&info.Author||''));}
+async function narouPdfToBook(file,progress=()=>{}){
+ if(file.size>MAX_PDF_SIZE*2)err('PDFは70MB以内にしてください');
+ const lib=await loadPDF(),assets=await pdfAssets();
+ const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false,
+  cMapUrl:assets.cMapUrl,cMapPacked:true,standardFontDataUrl:assets.standardFontDataUrl}).promise;
+ try{
+  const meta=await doc.getMetadata().catch(()=>null);
+  if(!isNarouPdfInfo(meta&&meta.info))err('小説家になろう公式の縦書きPDFではありません。普通のPDFは「⑤ 漫画・写真・PDF」の「文字を組み直す」で変換してください');
+  if(doc.numPages>8000)err('PDFは8000ページ以内にしてください');
+  // 1回目：全ページの文字列を集める（文字だけなので軽い）
+  const pages=[];let coverH=[];
+  for(let i=1;i<=doc.numPages;i++){
+   const page=await doc.getPage(i);
+   try{
+    const tc=await page.getTextContent(),st=tc.styles||{},v=[];
+    for(const it of tc.items){
+     if(typeof it.str!=='string'||!it.str)continue;
+     const t=it.transform||[1,0,0,1,0,0],size=Math.round(Math.hypot(t[0],t[1])*10)/10;
+     if(st[it.fontName]&&st[it.fontName].vertical)v.push({s:it.str,f:it.fontName,size,x:t[4],top:t[5],h:it.height||0});
+     else if(i===1)coverH.push({s:it.str.trim(),size});
+    }
+    pages.push(v);
+   }finally{if(page.cleanup)page.cleanup();}
+   if(i%20===0){progress(`PDFを読んでいます… ${i}/${doc.numPages}ページ`);await new Promise(ok=>setTimeout(ok,0));}
+  }
+  const all=pages.flat();if(!all.length)err('このPDFから縦書きの文字を読み取れませんでした');
+  // 書体と大きさで見分ける：最も多い大きさ＝本文の大きさ、その中で最も多い書体＝本文、同じ大きさの他の書体＝話タイトル、小さい字＝ルビ
+  const size=mode(all.map(o=>o.size)),body=all.filter(o=>o.size===size);
+  const bodyFont=mode(body.map(o=>o.f));
+  const bodyItems=body.filter(o=>o.f===bodyFont);
+  const top=Math.max(...bodyItems.map(o=>Math.round(o.top*10)/10));               // 列の上端＝本文の列で一番上（上端より上から始まる列はない）
+  const ends=bodyItems.map(o=>Math.round((o.top-o.h)*10)/10),minEnd=Math.min(...ends);
+  const bottom=mode(ends.filter(e=>e<=minEnd+size*1.5));                          // 列の下端＝一番下の終わりから1.5字以内で最も多い位置（ぶら下げを含む）
+  const xs=[...new Set(body.filter(o=>o.f===bodyFont).map(o=>Math.round(o.x*10)/10))].sort((a,b)=>b-a);
+  const diffs=[];for(let i=1;i<xs.length;i++){const d=Math.round((xs[i-1]-xs[i])*10)/10;if(d>size*0.8)diffs.push(d);}
+  const pitch=mode(diffs)||size*1.6,rightX=xs[0];
+  const full=end=>end<=bottom+size*0.6;
+  const chapters=[];let ch={title:'表紙・はじめ',text:''},prevFull=false,lastX=null,started=false;
+  const flushChapter=()=>{ch.text=ch.text.replace(/^\n+/,'').replace(/\n{4,}/g,'\n\n\n');if(ch.text.trim()){if(ch.heading)ch.text=ch.title+'\n\n'+ch.text;delete ch.heading;chapters.push(ch);}};   // 話タイトルは元のPDFどおり本文の頭にも出す
+  pages.forEach((items,pi)=>{
+   // 列にまとめる（同じxの文字列）
+   const colsMap=new Map();
+   for(const o of items){if(o.size<size*0.75)continue;const k=Math.round(o.x);let key=[...colsMap.keys()].find(q=>Math.abs(q-k)<=1);if(key===undefined){key=k;colsMap.set(key,[]);}colsMap.get(key).push(o);}
+   const cols=[...colsMap.values()].map(list=>{
+    list.sort((a,b)=>b.top-a.top);
+    const chars=[];let cursor=top;
+    for(const o of list){
+     let gap=Math.round((cursor-o.top)/size);for(let g=0;g<gap;g++){chars.push({c:'　',y:cursor});cursor-=size;}
+     // PDF.js が補った半角スペース：1文字だけの英数字にはさまれたもの（「Ｄ Ｍ Ｍ Ｏ」の字間）は消し、
+     // それ以外（「か？ ちょー」の全角スペース、英単語の間）は本物の空白として全角スペースにする
+     const tok=o.s.split(' ');let str=tok[0];
+     for(let q=1;q<tok.length;q++){const a=tok[q-1],b=tok[q];str+=([...a].length===1||[...b].length===1)&&/[0-9A-Za-z０-９Ａ-Ｚａ-ｚ]$/.test(a)&&/^[0-9A-Za-z０-９Ａ-Ｚａ-ｚ]/.test(b)?b:'　'+b;}
+     let y=o.top;for(const c of str){chars.push({c,y});y-=size;}
+     cursor=y;
+    }
+    return{x:list[0].x,title:list.some(o=>o.f!==bodyFont),chars,end:cursor};
+   }).sort((a,b)=>b.x-a.x);
+   // ルビ：列の右側の小さい字を、重なる本文の字（漢字があれば漢字の並び）に付ける
+   for(const o of items){
+    if(o.size>=size*0.75)continue;
+    const c=cols.filter(q=>q.x<o.x&&o.x-q.x<=size*1.3).sort((a,b)=>b.x-a.x)[0];if(!c)continue;
+    const lo=o.top-o.h,hi=o.top,rc=(lo+hi)/2;
+    // ルビと3割以上重なる字のうち、かっこ・句読点・空白で区切られた並びを候補にし、漢字が最も多い並び（同数なら中心が近い方）を選んで、
+    // 両端の漢字以外を外す。実物での確認：絶対者《ギルドマスター》・斬神刀皇《ざんしんとうおう》・請負人《ワーカー》・魔法工《ドワーフ》は正しく、
+    // 作り手側でルビの位置がずれていた『始原の魔法《ワイルド・マジック》』は「魔法」に付く（位置からは元の範囲を復元できない）
+    const PUNCT=/[『』「」【】（）()〈〉《》［］、。，．！？!?…‥・　\s]/;
+    const near=c.chars.map((q,k)=>[k,Math.min(hi,q.y)-Math.max(lo,q.y-size)]).filter(([,ov])=>ov>=size*0.3).map(([k])=>k);
+    const runs=[];let run=[];
+    for(const k of near){const ok=!PUNCT.test(c.chars[k].c);if(ok&&(!run.length||k===run[run.length-1]+1))run.push(k);else{if(run.length)runs.push(run);run=ok?[k]:[];}}
+    if(run.length)runs.push(run);
+    let bestR=null,bestK=-1,bestD=Infinity;
+    for(const r of runs){
+     const kc=r.filter(k=>KANJI_RE.test(c.chars[k].c)).length,center=(c.chars[r[0]].y+c.chars[r[r.length-1]].y-size)/2,d=Math.abs(center-rc);
+     if(kc>bestK||kc===bestK&&d<bestD){bestK=kc;bestD=d;bestR=r.slice();}
+    }
+    if(bestR&&bestK>0){while(!KANJI_RE.test(c.chars[bestR[0]].c))bestR.shift();while(!KANJI_RE.test(c.chars[bestR[bestR.length-1]].c))bestR.pop();}
+    if(bestR)bestR=[bestR[0],bestR[bestR.length-1]];
+    const idx=bestR?[bestR[0],bestR[1]]:[];
+    if(!idx.length)continue;
+    const a=idx[0],b=idx[idx.length-1],r=o.s.replace(/\s/g,'');
+    if(c.chars.slice(a,b+1).some(q=>q.ruby||q.inRuby))continue;
+    c.chars[a].ruby={end:b,text:r,em:/^[・﹅•●]+$/.test(r)};for(let k=a+1;k<=b;k++)c.chars[k].inRuby=true;
+   }
+   cols.forEach((c,ci)=>{
+    let text='';
+    for(let k=0;k<c.chars.length;k++){
+     const q=c.chars[k];
+     if(q.ruby){const base=c.chars.slice(k,q.ruby.end+1).map(z=>z.c).join('');text+=q.ruby.em?'《《'+base+'》》':'｜'+base+'《'+q.ruby.text+'》';k=q.ruby.end;continue;}
+     text+=q.c==='《'?'|《':q.c;
+    }
+    if(c.title){flushChapter();ch={title:text.replace(/^[\s　]+|[\s　]+$/g,'').slice(0,90)||'無題',text:'',heading:true};prevFull=false;lastX=c.x;started=true;return;}
+    const blanks=ci===0?Math.max(0,Math.round((rightX-c.x)/pitch)):Math.max(0,Math.round((lastX-c.x)/pitch)-1);
+    const startsTop=!/^　/.test(text);
+    if(prevFull&&blanks===0&&startsTop&&ch.text)ch.text+=text;      // 前の列が下端まで埋まっていた＝同じ行の続き（ページをまたぐ場合も）
+    else ch.text+=(ch.text?'\n'.repeat(1+blanks):'')+text;
+    prevFull=full(c.end);lastX=c.x;
+   });
+   if(!cols.length)prevFull=false;
+  });
+  flushChapter();
+  if(!chapters.length)err('本文を組み立てられませんでした');
+  // 作品名・作者名：注意事項の【作品タイトル】【作者名】、なければ表紙の大きい字
+  const front=chapters.find(c=>/【作品タイトル】/.test(c.text));
+  const pick=label=>{if(!front)return'';const m=front.text.match(new RegExp('【'+label+'】\\n[　\\s]*([^\\n]+)'));return m?m[1].trim():'';};
+  coverH=coverH.filter(o=>o.s&&!/HinaProject/i.test(o.s)).sort((a,b)=>b.size-a.size);
+  const title=pick('作品タイトル')||(coverH[0]&&coverH[0].s)||displayName(file.name).replace(/\.pdf$/i,'');
+  const author=pick('作者名')||(coverH[1]&&coverH[1].s)||'';
+  return{title,author,chapters,source:'narou-pdf',vertical:true,pdfPages:doc.numPages};
+ }finally{await doc.destroy();}
 }
 async function pdfToBook(files,progress=()=>{},opt={}){
  const lib=await loadPDF(),assets=await pdfAssets(),pages=[],figures=[];
@@ -749,7 +866,7 @@ async function pdfToBook(files,progress=()=>{},opt={}){
  const book=linesToBook(pages,title);book.figures=figures;return book;
 }
 g.EbookForgeDocuments={
- fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,diagnosePDFPage,aaBlocks,aaScore,ENGINE:'0.6.6',
+ fileType,acceptedImage,fromPDF,fromRAR,pdfToBook,pdfPageLines,linesToBook,displayName,pageFigureRects,diagnosePDFPage,aaBlocks,aaScore,narouPdfToBook,isNarouPdfInfo,ENGINE:'0.8.0',
  // Test hooks do not activate in the normal app.
  ...(typeof g.__EBOOKFORGE_TEST__==='boolean'&&g.__EBOOKFORGE_TEST__?
    {_setTestDependencies:deps=>Object.assign(testDeps,deps)}:{})

@@ -5,7 +5,7 @@
 .toc{max-height:310px;overflow:auto;border:1px solid #ddd;border-radius:8px}.toc label{display:flex;gap:12px;font-weight:400;border-bottom:1px solid #eee;padding:12px;margin:0}.toc input{width:18px;height:18px;flex:none}
 #preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}[hidden]{display:none!important}
 @media(max-width:540px){.toprow{grid-template-columns:1fr}.btnline{flex-wrap:wrap}}.search-result{padding:12px;border-bottom:1px solid #ddd}.manga-sites{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:9px}.manga-sites a{display:block;padding:10px;border:1px solid #ccd6df;border-radius:8px;text-decoration:none}.manga-sites small{display:block}.manga-preview{display:block;max-width:360px;width:100%;height:auto;margin:10px auto;border:2px solid #7f8790}.search-result a{font-weight:700}.smallbtn{font-size:.85rem;padding:7px}
-</style></head><body><h1>EbookForge Web <small>v0.6.6 PDF・RAR対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
+</style></head><body><h1>EbookForge Web <small>v0.8.0 PDF・RAR・カクヨム・なろう対応開発版</small></h1><p>スマホのみで小説・画像・漫画・PDF・RAR/CBRをXTEINK X3向けXTC/XTCHに変換します。ファイルは端末内で処理され、サーバーへ送信されません。</p><p><a href="#manga-area">📚 漫画・写真の変換へ移動 ↓</a></p>
 
 <section><h2>① X3の出力モード</h2>
 <label for="profile">利用するファームウェア</label>
@@ -27,19 +27,31 @@
 <button id="aozora-search-btn">索引から検索</button><div id="aozora-results" role="status"></div>
 <p class="hint">著作権フラグが「なし」の作品を表示します。検索結果から青空文庫の公式図書カードへ移動できます。本文の自動取得は未対応です。</p>
 </section><section><h2>③ 本を読み込む</h2>
-<label for="book-file">TXT・Markdown・EPUB・画像</label>
-<input id="book-file" type="file" multiple accept=".txt,.md,.markdown,.epub,.png,.jpg,.jpeg,.webp,text/plain,application/epub+zip,image/*">
+<label for="book-file">TXT・Markdown・EPUB・画像・なろう公式の縦書きPDF</label>
+<input id="book-file" type="file" multiple accept=".txt,.md,.markdown,.epub,.pdf,.png,.jpg,.jpeg,.webp,text/plain,application/epub+zip,application/pdf,image/*">
 <p class="hint">画像はPNG/JPG/WEBP。PDF・RAR・CBRは下の「⑤ 漫画・写真・PDF・RAR/CBR」で変換できます。</p>
 <label for="book-title">タイトル</label><input id="book-title" value="電子書籍">
 <label for="book-author">著者</label><input id="book-author" placeholder="任意">
 <details><summary>本文を直接貼り付ける（TXT / Markdown）</summary>
-<textarea id="book-input" placeholder="# 第一章&#10;本文……"></textarea>
+<div id="narou-pdf-box"><label for="narou-pdf-code">小説家になろう：公式の縦書きPDFを開く（URLまたはNコード）</label>
+<input id="narou-pdf-code" inputmode="url" placeholder="https://ncode.syosetu.com/n4402bd/ または n4402bd">
+<button id="narou-pdf-open" type="button">公式の縦書きPDFを開く</button><p id="narou-pdf-status" class="status" role="status"></p>
+<p class="hint">なろう公式の縦書きPDF作成ページをSafariで開くだけで、アプリは自動で取得しません。保存したPDFは、上の「TXT・Markdown・EPUB・画像・なろう公式の縦書きPDF」で選んで読み込むと、話ごとの章・ルビ付きで組み直せます。</p></div>
+<p class="hint"><b>小説家になろう</b>：話のページで本文を含めて全選択→コピーし、ここに貼ってください。何話分でも続けて貼れます。話数表示（1/98 など）で話を区切り、作品名・作者名・画面の文言を自動で整理し、ルビ（漢字(かんじ)の形）も組みます。</p><p class="hint">カクヨム・小説家になろうの記法に対応：｜漢字《かんじ》・漢字《かんじ》＝ルビ、《《強調》》＝傍点。話の区切りは「第1話」「閑話」などの行で自動判定します。判定されないときは区切りの行の先頭に「# 」を付けてください。</p><textarea id="book-input" placeholder="# 第一章&#10;本文……"></textarea>
 <button id="book-from-text">貼り付け本文を読み込む</button></details>
+<details id="kk-box"><summary>カクヨムの作品URLから取り込む</summary>
+<p class="hint">あなた専用の中継サーバー（Cloudflare Workers）を通して、カクヨムの作品を1話ずつ1.5秒の間隔で取り込みます。本文は端末の中だけで使い、他人に渡さないでください（私的利用の範囲）。小説家になろうは利用規約で自動取得が禁止されているため対象外です。</p><p><a href="kakuyomu-setup.html">▶ 中継サーバーの作り方（初回のみ・iPhoneで約10分）</a></p>
+<label for="kk-url">作品URL</label><input id="kk-url" type="url" inputmode="url" placeholder="https://kakuyomu.jp/works/…">
+<label for="kk-relay">中継サーバーのURL</label><input id="kk-relay" type="url" inputmode="url" placeholder="https://〇〇.workers.dev">
+<label for="kk-key">合言葉</label><input id="kk-key" type="password" autocomplete="off">
+<label class="check"><input type="checkbox" id="kk-remember" checked> 中継サーバーのURLと合言葉をこの端末に保存する</label>
+<div class="btnline"><button id="kk-import" type="button">取り込む</button><button id="kk-cancel" type="button" hidden>中止</button></div>
+<p id="kk-status" class="status" role="status"></p></details>
 <button id="book-load">選択したファイルを読み込む</button>
 <p id="book-load-status" class="status" role="status"></p><button id="book-save-epub" hidden>EPUBをそのまま保存（CrossPoint用）</button>
 <div id="book-toc-box" hidden><h3>章を選択</h3>
 <div class="btnline"><button id="toc-all">すべて選択</button><button id="toc-none">すべて解除</button></div>
-<div id="book-toc" class="toc"></div><p id="toc-summary"></p></div></section>
+<div id="book-vol-box" hidden><label for="book-vol">分冊</label><select id="book-vol"></select><p id="book-vol-note" class="hint"></p></div><div id="book-toc" class="toc"></div><p id="toc-summary"></p></div></section>
 <section><h2>④ 日本語組版・XTC変換</h2>
 <div class="toprow">
 <div><label for="direction">方向</label><select id="direction"><option value="vertical">縦書き</option><option value="horizontal">横書き</option></select></div>
@@ -47,7 +59,7 @@
 <div><label for="book-margin">余白</label><select id="book-margin"><option value="20">狭い</option><option value="30" selected>標準</option><option value="45">広い</option></select></div>
 <div><label for="book-spacing">行間</label><select id="book-spacing"><option value="1.25">狭い</option><option value="1.45" selected>標準</option><option value="1.75">広い</option></select></div>
 </div>
-<button id="book-build">ページを生成してプレビュー</button>
+<label class="check"><input type="checkbox" id="book-paren-ruby"> 漢字（かな）をルビにする（カクヨム等の画面からコピーした本文向け。普通の文の「結果（まとめ）」などもルビになります）</label><button id="book-build">ページを生成してプレビュー</button>
 <p id="book-status" class="status" role="status"></p>
 <div id="preview-box" hidden><h3>X3実機サイズ（528×792）</h3>
 <canvas id="preview" width="528" height="792"></canvas>
@@ -127,4 +139,4 @@
 <p class="hint">DRMの解除は行いません。原本は変更せず別ファイルを保存します。著作権・利用条件に従って利用してください。</p>
 </section>
 <section><h2>本文を入力</h2><label for="file">UTF-8テキストファイル</label><input id="file" type="file" accept=".txt,text/plain"><label for="title">タイトル</label><input id="title" value="電子書籍"><label for="author">著者</label><input id="author" placeholder="任意"><label for="body">本文</label><textarea id="body" placeholder="ここに本文を貼り付けることもできます"></textarea></section>
-<section><h2>変換</h2><label for="device">端末</label><select id="device"><option value="X3" selected>XTEINK X3（528×792）</option><option value="X4">XTEINK X4（480×800）</option></select><label for="size">文字サイズ</label><select id="size"><option value="22">22 px</option><option value="18">18 px</option><option value="26">26 px</option></select><button id="convert">XTCを作成して保存</button><p id="status" class="status" role="status"></p><p class="hint">横書き・1bit XTCの初期実装です。ルビ、縦書き、XTCH、端末への直接Wi-Fi送信は未対応。生成ファイルの実機動作は未検証です。</p></section></details><script src="epub.js?v=0.6.6"></script><script src="app.js?v=0.6.6"></script><script src="book.js?v=0.6.6"></script><script src="catalog.js?v=0.6.6"></script><script src="studio.js?v=0.6.6"></script><script src="document-input.js?v=0.6.6"></script><script src="manga.js?v=0.6.6"></script><script src="manga-ui.js?v=0.6.6"></script></body></html>
+<section><h2>変換</h2><label for="device">端末</label><select id="device"><option value="X3" selected>XTEINK X3（528×792）</option><option value="X4">XTEINK X4（480×800）</option></select><label for="size">文字サイズ</label><select id="size"><option value="22">22 px</option><option value="18">18 px</option><option value="26">26 px</option></select><button id="convert">XTCを作成して保存</button><p id="status" class="status" role="status"></p><p class="hint">横書き・1bit XTCの初期実装です。ルビ、縦書き、XTCH、端末への直接Wi-Fi送信は未対応。生成ファイルの実機動作は未検証です。</p></section></details><script src="epub.js?v=0.8.0"></script><script src="app.js?v=0.8.0"></script><script src="book.js?v=0.8.0"></script><script src="catalog.js?v=0.8.0"></script><script src="studio.js?v=0.8.0"></script><script src="kakuyomu.js?v=0.8.0"></script><script src="document-input.js?v=0.8.0"></script><script src="manga.js?v=0.8.0"></script><script src="manga-ui.js?v=0.8.0"></script></body></html>

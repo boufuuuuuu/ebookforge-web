@@ -1,14 +1,53 @@
-/* EbookForge Web v0.3: chapter extraction, 1bit XTC rendering. */
+/* EbookForge Web v0.6.7: chapter extraction, Kakuyomu/Narou notation, 1bit XTC rendering. */
 (function(g){
 'use strict';
 const te=new TextEncoder(), dec=new TextDecoder('utf-8',{fatal:true});
 function filename(s){return String(s||'ebook').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').slice(0,70);}
 function utf(s,n){const a=new Uint8Array(n);let p=0;for(const c of String(s||'')){const b=te.encode(c);if(p+b.length>=n)break;a.set(b,p);p+=b.length;}return a;}
+// v0.7.1: 小説家になろうの話のページをコピーして貼った本文を整理する（サイトからの自動取得はしない）。
+// 「1/98」のような話数表示の行と「作者：」の行が両方あるときだけ働く。話数表示の次の行を話タイトル（章）にし、
+// 毎回くり返される作品名・作者の行と、画面の操作用の文言（その行だけのもの）を捨てる。ルビは 漢字(かんじ) の形なのでかっこルビを使う。
+const NAROU_COUNTER=/^\s*([0-9０-９]{1,5})\s*[\/／]\s*([0-9０-９]{1,5})\s*$/;
+const NAROU_AUTHOR=/^\s*作者[：:]\s*(.{1,60}?)\s*$/;
+const NAROU_CHROME=new Set(['↓','↑ページトップへ','小説家になろう','小説を読もう！','ランキング','ログイン','作品情報','感想','レビュー','ブックマークに追加','ブックマーク','表示調整','目次','次へ','前へ','<< 前へ','次へ >>','＜＜ 前へ','次へ ＞＞','前へ >>','評価をするには ログイン してください。','感想を書く','Tweet','LINEで送る','コピー','ブックマーク機能を使うには ログイン してください。','―　新着の感想　―','感想一覧','感想を書く場合は ログイン してください。','作者マイページ','誤字報告','情報提供','+注意+','作品検索','しおりを挟む','しおり','ポイントを入れて作者を応援しましょう！','いいねをする','いいね','ページトップへ']);
+function fromNarouCopy(text){
+ const lines=String(text).replace(/\r\n?/g,'\n').split('\n');
+ if(!lines.some(l=>NAROU_COUNTER.test(l))||!lines.some(l=>NAROU_AUTHOR.test(l)))return null;
+ // 作品名＝「作者：」の直前の空でない行のうち、最も多いもの
+ const cand=new Map();let author='';
+ lines.forEach((l,i)=>{const m=l.match(NAROU_AUTHOR);if(!m)return;author=author||m[1].trim();
+  for(let j=i-1;j>=0;j--)if(lines[j].trim()){const t=lines[j].trim();cand.set(t,(cand.get(t)||0)+1);break;}});
+ const workTitle=[...cand].sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+ const chapters=[];let ch=null,skipHead=false;
+ for(let i=0;i<lines.length;i++){
+  const raw=lines[i],t=raw.trim();
+  if(NAROU_CHROME.has(t))continue;
+  if(NAROU_COUNTER.test(raw)){                       // 話数表示 → 次の空でない行が話タイトル
+   let j=i+1;while(j<lines.length&&(!lines[j].trim()||NAROU_CHROME.has(lines[j].trim())))j++;
+   if(j<lines.length){if(ch&&ch.text.trim())chapters.push(ch);ch={title:lines[j].trim().slice(0,90),text:''};i=j;skipHead=true;}
+   continue;
+  }
+  if(!ch)continue;                                   // 最初の話数表示より前（画面の上部）は捨てる
+  if(skipHead&&(!t||t===workTitle||NAROU_AUTHOR.test(raw)))continue;   // 話タイトル直後の作品名・作者の行
+  skipHead=false;
+  if(NAROU_AUTHOR.test(raw)&&t.length<=40)continue;
+  ch.text+=raw+'\n';
+ }
+ if(ch&&ch.text.trim())chapters.push(ch);
+ if(!chapters.length)return null;
+ for(const c of chapters)c.text=c.text.replace(/\n{4,}/g,'\n\n\n').replace(/^\n+/,'');
+ return{title:workTitle||'電子書籍',author,chapters,source:'narou',parenRuby:true};
+}
 function fromText(text,title='電子書籍',md=false){
- const mark=md?/^#{1,3}\s+(.+)/:/^\s*(第[一二三四五六七八九十百千0-9０-９]+[章話部編節].*|序章|終章|プロローグ|エピローグ)\s*$/;
+ if(!md){const n=fromNarouCopy(text);if(n)return n;}
+ // v0.6.7: 話タイトル（第N話・閑話・幕間・番外編・Episode N 等）も章にする。文の途中の「第1話で…」は章にしない
+ const mark=md?/^#{1,3}\s+(.+)/:/^\s*(第[一二三四五六七八九十百千〇0-9０-９]+[章話部編節幕回].{0,40}|(?:序章|終章|プロローグ|エピローグ|閑話|幕間|間章|断章|番外編|外伝|あとがき)(?:[\s　:：・].{0,40})?|(?:Episode|EP|Ep|ep)\.?\s*[0-9０-９]+.{0,40}|[0-9０-９]{1,4}話(?:[\s　:：].{0,40})?)\s*$/;
+ // カクヨムの画面からコピーしたときに混ざる操作用の文言（その行だけのもの）は捨てる
+ const CHROME=/^\s*(応援する|応援コメント|次のエピソード|前のエピソード|★で称える|レビューを書く|コメントを書く)\s*$/;
  const chapters=[];let ch={title:'本文',text:''};
  for(const line of String(text).replace(/\r\n?/g,'\n').split('\n')){
-  const m=line.match(mark);if(m){if(ch.text.trim())chapters.push(ch);ch={title:(m[1]||'章').slice(0,90),text:''};}
+  if(CHROME.test(line))continue;
+  const m=!/[。、」』]\s*$/.test(line)||md?line.match(mark):null;if(m){if(ch.text.trim())chapters.push(ch);ch={title:(m[1]||'章').slice(0,90),text:''};}
   else ch.text+=line.replace(/\*\*([^*]+)\*\*/g,'$1')+'\n';
  }
  if(ch.text.trim())chapters.push(ch);
@@ -57,10 +96,31 @@ async function fromEpub(data,progress=()=>{}){
  return {title:nodes(opf,'title')[0]?.textContent?.trim()||'電子書籍',
   author:nodes(opf,'creator')[0]?.textContent?.trim()||'',chapters,source:'epub'};
 }
+// v0.6.7: カクヨム・小説家になろうの記法に対応
+//  ｜漢字《かんじ》 / |漢字《かんじ》 / 漢字《かんじ》（直前の漢字の並び）＝ルビ、《《強調》》＝傍点、|《 ＝「《」そのもの
+//  PAREN_RUBY のとき、漢字の直後の（かなだけ）もルビにする（カクヨムの画面からコピーした本文は 漢字（かんじ） の形になるため）
+const KANJI='\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF々〆〇ヶ';
+const RUBY_RE=new RegExp('[|｜]《|《《([^《》\\n]{1,50})》》|[|｜]([^《|｜\\n]{1,20})《([^《》\\n]{1,30})》|(['+KANJI+']{1,20})《([^《》\\n]{1,30})》','g');
+const PAREN_RE=new RegExp('(['+KANJI+']{1,20})[（(]([ぁ-ゖァ-ヺー]{1,20})[）)]','g');
+let PAREN_RUBY=false;
 function tokenize(s){
- const out=[],re=/｜([^《\n]{1,60})《([^》\n]{1,60})》/g;let pos=0,m;
+ const out=[];
  function add(t){for(const x of t.match(/\n|[A-Za-z0-9]{1,20}|[\s\S]/gu)||[])out.push(x==='\n'?{t:'nl'}:{t:/^[A-Za-z0-9]{2,20}$/.test(x)?'ascii':'char',s:x});}
- while((m=re.exec(s))){add(s.slice(pos,m.index));out.push({t:'ruby',s:m[1],ruby:m[2]});pos=re.lastIndex;}add(s.slice(pos));return out;
+ function plain(t){
+  if(!PAREN_RUBY){add(t);return;}
+  let p=0,m;PAREN_RE.lastIndex=0;
+  while((m=PAREN_RE.exec(t))){add(t.slice(p,m.index));out.push({t:'ruby',s:m[1],ruby:m[2]});p=PAREN_RE.lastIndex;}
+  add(t.slice(p));
+ }
+ let pos=0,m;RUBY_RE.lastIndex=0;
+ while((m=RUBY_RE.exec(s))){
+  plain(s.slice(pos,m.index));pos=RUBY_RE.lastIndex;
+  if(m[0].length===2&&m[0][1]==='《'){out.push({t:'char',s:'《'});continue;}
+  if(m[1]!==undefined){for(const c of Array.from(m[1]))out.push(c==='\n'?{t:'nl'}:{t:'char',s:c,em:true});continue;}
+  if(m[2]!==undefined){out.push({t:'ruby',s:m[2],ruby:m[3]});continue;}
+  out.push({t:'ruby',s:m[4],ruby:m[5]});
+ }
+ plain(s.slice(pos));return out;
 }
 // v0.5.9: 書体・太さ・白黒化のしきい値を renderBook のオプションで変更可能に（既定は従来どおり明朝・128）
 const MINCHO='"Hiragino Mincho ProN","Yu Mincho",serif';
@@ -73,10 +133,12 @@ function drawV(ctx,t,x,y,step,size){
   ctx.font=`${fs}px serif`;const origin=y+(base.length*step-chars.length*d)/2;
   chars.forEach((c,i)=>ctx.fillText(c,x+size*.68,origin+(i+.5)*d));return;
  }
- if(t.t==='ascii'&&t.s.length<=2){ctx.font=`${Math.round(size*.74)}px sans-serif`;ctx.fillText(t.s,x,y);return;}
+ // 1〜2桁の英数字は立てたまま（縦中横）。長い英単語を1字ずつに分けたもの（rot）だけ横倒しにする
+ if(!t.rot&&/^[A-Za-z0-9]{1,2}$/.test(t.s)){ctx.font=`${Math.round(size*.74)}px sans-serif`;ctx.fillText(t.s,x,y);return;}
  if(/[A-Za-z0-9]/.test(t.s)){ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/2);ctx.fillText(t.s,0,0);ctx.restore();return;}
- const forms={'ー':'｜','「':'﹁','」':'﹂','『':'﹃','』':'﹄','（':'︵','）':'︶'};
+ const forms={'ー':'｜','「':'﹁','」':'﹂','『':'﹃','』':'﹄','（':'︵','）':'︶','《':'︽','》':'︾'};
  ctx.fillText(forms[t.s]||t.s,x+('、。'.includes(t.s)?size*.2:0),y-('、。'.includes(t.s)?size*.2:0));
+ if(t.em){ctx.beginPath();ctx.arc(x+size*.68,y,Math.max(1.6,size*.09),0,Math.PI*2);ctx.fill();}   // 傍点（右側の黒丸）
 }
 function pack(ctx,W,H){
  const pix=ctx.getImageData(0,0,W,H).data,stride=Math.ceil(W/8),data=new Uint8Array(stride*H);data.fill(255);
@@ -99,8 +161,8 @@ function decodePage(b,W,H,canvas,xtch=false){
  }ctx.putImageData(img,0,0);
 }
 async function renderBook(book,opt={},progress=()=>{}){
- FAM=opt.fontFamily||MINCHO;WT=opt.fontWeight?opt.fontWeight+' ':'';THR=Number(opt.inkThreshold)||128;
- try{return await renderBookInner(book,opt,progress);}finally{FAM=MINCHO;WT='';THR=128;}
+ FAM=opt.fontFamily||MINCHO;WT=opt.fontWeight?opt.fontWeight+' ':'';THR=Number(opt.inkThreshold)||128;PAREN_RUBY=!!opt.parenRuby;
+ try{return await renderBookInner(book,opt,progress);}finally{FAM=MINCHO;WT='';THR=128;PAREN_RUBY=false;}
 }
 async function renderBookInner(book,opt={},progress=()=>{}){
  const W=528,H=792,v=opt.vertical!==false,fs=Number(opt.font)||22,m=Number(opt.margin)||30,spacing=Number(opt.spacing)||1.45;
@@ -133,7 +195,7 @@ async function renderBookInner(book,opt={},progress=()=>{}){
  async function layoutText(text){
   const ts=tokenize(text);
   for(let i=0;i<ts.length;i++){
-   const list=ts[i].t==='ascii'&&ts[i].s.length>2?Array.from(ts[i].s).map(s=>({t:'char',s})):[ts[i]];
+   const list=ts[i].t==='ascii'&&(ts[i].s.length>2||/[a-z]/.test(ts[i].s))?Array.from(ts[i].s).map(s=>({t:'char',s,rot:true})):[ts[i]];
    for(const t of list){
     if(t.t==='nl'){next();continue;}
     const cells=t.t==='ruby'?Math.max(1,Array.from(t.s).length):1;
@@ -146,7 +208,9 @@ async function renderBookInner(book,opt={},progress=()=>{}){
      const value=t.t==='ruby'?t.s+'（'+t.ruby+'）':t.s;
      ctx.font=`${WT}${fs}px ${FAM}`;ctx.textAlign='left';ctx.textBaseline='top';ctx.fillStyle='#000';
      const width=ctx.measureText(value).width;if(c+width>W-2*m&&c>0)next();
-     ctx.fillText(value,m+c,m+r*step);c+=width;ink=true;
+     ctx.fillText(value,m+c,m+r*step);
+     if(t.em){ctx.beginPath();ctx.arc(m+c+width/2,m+r*step-fs*.14,Math.max(1.6,fs*.09),0,Math.PI*2);ctx.fill();}   // 傍点（上側の黒丸）
+     c+=width;ink=true;
     }
    }
    if(i%500===0&&i)await new Promise(ok=>setTimeout(ok,0));
@@ -173,5 +237,6 @@ function buildXtcWithChapters(pages,chapters,title,author,vertical=true,format='
  b.set(color?[88,84,72,0]:[88,84,71,0],o);dv.setUint16(o+4,W,true);dv.setUint16(o+6,H,true);dv.setUint32(o+10,PS,true);
  b.set(md5(pages[i]).slice(0,8),o+14);b.set(pages[i],o+PH);}return b;
 }
-g.EbookForgeBook={fromText,fromEpub,renderBook,buildXtcWithChapters,decodePage,safeName:filename,pack};
+g.EbookForgeBook={fromText,fromNarouCopy,fromEpub,renderBook,buildXtcWithChapters,decodePage,safeName:filename,pack,tokenize,
+ _setParenRuby:v=>{PAREN_RUBY=!!v;}};
 })(typeof window!=='undefined'?window:globalThis);

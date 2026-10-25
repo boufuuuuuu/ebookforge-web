@@ -29,7 +29,8 @@ function tocRefresh(){
  msg('toc-summary',`${book.chapters.filter(c=>c.selected!==false).length} / ${book.chapters.length}章を選択`);
 }
 function useBook(b,imgs=[]){
- book=b;imageFiles=imgs;result=null;
+ book=b;imageFiles=imgs;result=null;baseTitle='';
+ if(b.parenRuby&&$('book-paren-ruby'))$('book-paren-ruby').checked=true;   // v0.7.1: なろうのコピー本文はルビが 漢字(かんじ) の形
  $('book-title').value=b.title||'電子書籍';$('book-author').value=b.author||'';
  $('preview-box').hidden=true;$('book-toc-box').hidden=false;
  const el=$('book-toc');el.replaceChildren();
@@ -40,7 +41,44 @@ function useBook(b,imgs=[]){
   span.textContent=`${i+1}. ${ch.title}（${ch.text.length}文字）`;
   label.append(input,span);el.appendChild(label);
  });
- tocRefresh();mode();
+ tocRefresh();mode();planVolumes();
+}
+
+// v0.8.0: 分冊。X3で組むと900ページを超える長い作品は、章の切れ目で約600ページずつの巻に分け、1巻ずつ作る
+let baseTitle='';
+function pageCapacity(){
+ const fs=Number($('book-size').value)||22,m=Number($('book-margin').value)||30,sp=Number($('book-spacing').value)||1.45;
+ const step=Math.ceil(fs*sp),line=Math.ceil(fs*(sp+.15));
+ return Math.max(50,Math.floor((792-2*m)/step)*Math.floor((528-2*m)/line));
+}
+function estPages(ch,cap){            // 改行で列が余る分を見込む、章の頭は改ページ
+ return Math.ceil(String(ch.text).length*1.4/cap)+1;     // 実測（なろう縦書きPDF：見積もり571→実際672ページ）から1.4倍
+}
+function planVolumes(){
+ const box=$('book-vol-box');if(!box)return;
+ if(!book||book.source==='image'){box.hidden=true;return;}
+ const cap=pageCapacity(),est=book.chapters.map(c=>estPages(c,cap)),total=est.reduce((a,b)=>a+b,0);
+ baseTitle=baseTitle&&book.__vol?baseTitle:(book.title||'');
+ if(total<=800){box.hidden=true;return;}
+ const vols=[];let cur={from:0,to:-1,pages:0};
+ est.forEach((p,i)=>{if(cur.pages+p>600&&cur.to>=cur.from){vols.push(cur);cur={from:i,to:i-1,pages:0};}cur.to=i;cur.pages+=p;});
+ vols.push(cur);
+ const sel=$('book-vol');sel.replaceChildren();
+ vols.forEach((v,i)=>{const o=document.createElement('option');o.value=v.from+'-'+v.to;
+  o.textContent=`第${i+1}巻：${v.from+1}〜${v.to+1}章（約${v.pages}ページ）`;sel.appendChild(o);});
+ box.hidden=false;msg('book-vol-note',`全${book.chapters.length}章・約${total}ページになるため、${vols.length}巻に分けます。巻を選び、1巻ずつ「ページを生成」→「保存」してください。`);
+ book.__vol=true;applyVolume();
+}
+function applyVolume(){
+ const sel=$('book-vol');if(!book||!sel.value)return;
+ const [a,b]=sel.value.split('-').map(Number);
+ book.chapters.forEach((c,i)=>c.selected=i>=a&&i<=b);
+ $('book-toc').querySelectorAll('input').forEach((x,i)=>x.checked=i>=a&&i<=b);
+ $('book-title').value=`${baseTitle} 第${sel.selectedIndex+1}巻`;tocRefresh();
+}
+if($('book-vol')){
+ $('book-vol').addEventListener('change',applyVolume);
+ for(const id of ['book-size','book-margin','book-spacing'])$(id).addEventListener('change',()=>{if(book&&book.__vol)planVolumes();});
 }
 for(const [id,checked] of [['toc-all',true],['toc-none',false]]){
  $(id).addEventListener('click',()=>{if(!book)return;book.chapters.forEach(c=>c.selected=checked);
@@ -72,7 +110,13 @@ $('book-load').addEventListener('click',async()=>{
   }else if(['txt','md','markdown'].includes(ext)){
    if(files.length!==1)throw Error('TXT/MDは1冊ずつ選択してください');sourceEpub=null;
    b=EbookForgeBook.fromText(readEncoding(await files[0].arrayBuffer()),files[0].name.replace(/\.[^.]+$/,''),ext!=='txt');
-  }else throw Error('対応形式はTXT・MD・EPUB・画像です');
+  }else if(ext==='pdf'){
+   // v0.8.0: 小説家になろう公式の縦書きPDF（それ以外のPDFは⑤で変換）
+   if(files.length!==1)throw Error('PDFは1冊ずつ選択してください');sourceEpub=null;
+   msg('book-load-status','PDFを読んでいます…');
+   b=await EbookForgeDocuments.narouPdfToBook(files[0],t=>msg('book-load-status',t));
+   if(b.vertical)$('direction').value='vertical';
+  }else throw Error('対応形式はTXT・MD・EPUB・画像・なろう公式の縦書きPDFです');
   useBook(b,img);msg('book-load-status',`${b.chapters.length}章を読み込みました。`);
  }catch(e){msg('book-load-status','エラー: '+e.message);}
  finally{btn.disabled=false;}
@@ -127,7 +171,8 @@ $('book-build').addEventListener('click',async()=>{
    msg('book-status','ページを生成中…');
    result=await EbookForgeBook.renderBook(book,{
     vertical:$('direction').value==='vertical',font:Number($('book-size').value),
-    margin:Number($('book-margin').value),spacing:Number($('book-spacing').value)},
+    margin:Number($('book-margin').value),spacing:Number($('book-spacing').value),
+    parenRuby:!!($('book-paren-ruby')&&$('book-paren-ruby').checked)},
     (i,n)=>msg('book-status',`章 ${i}/${n}`));
   }
   book.title=$('book-title').value||book.title;book.author=$('book-author').value||'';
@@ -216,4 +261,39 @@ $('aozora-search-btn').addEventListener('click',()=>{
   d.append(a,sub);box.appendChild(d);
  }
 });
+
+// v0.7.0: カクヨムの作品URLから取り込む（kakuyomu.js・あなた専用の中継サーバー経由）
+(function(){
+ if(!$('kk-import'))return;
+ const LS='ebookforge-kakuyomu-relay';
+ try{const v=JSON.parse(localStorage.getItem(LS)||'null');if(v){$('kk-relay').value=v.relay||'';$('kk-key').value=v.key||'';}}catch(_){}
+ let ctl=null;
+ $('kk-cancel').addEventListener('click',()=>{if(ctl)ctl.abort();});
+ $('kk-import').addEventListener('click',async()=>{
+  const btn=$('kk-import');btn.disabled=true;$('kk-cancel').hidden=false;ctl=new AbortController();
+  const relay=$('kk-relay').value.trim(),key=$('kk-key').value;
+  try{
+   if(!relay||!key)throw Error('中継サーバーのURLと合言葉を入れてください');
+   try{if($('kk-remember').checked)localStorage.setItem(LS,JSON.stringify({relay,key}));else localStorage.removeItem(LS);}catch(_){}
+   const b=await EbookForgeKakuyomu.importWork({relay,key,url:$('kk-url').value,signal:ctl.signal,progress:t=>msg('kk-status',t)});
+   sourceEpub=null;useBook(b);
+   msg('kk-status',`取り込み完了：${b.title}（${b.chapters.length}話・目次は${b.via}から）。下の「④ 日本語組版・XTC変換」へ進んでください。`);
+   msg('book-load-status',`${b.chapters.length}章を抽出しました（カクヨム）`);
+  }catch(e){msg('kk-status','取り込めませんでした：'+e.message);}
+  finally{btn.disabled=false;$('kk-cancel').hidden=true;ctl=null;}
+ });
+})();
+
+// v0.7.2: 小説家になろう公式の縦書きPDF作成ページを開く（取得はしない。開くだけ）
+(function(){
+ if(!$('narou-pdf-open'))return;
+ $('narou-pdf-open').addEventListener('click',()=>{
+  const v=$('narou-pdf-code').value.trim(),m=v.match(/(?:^|\/)(n\d{4}[a-z]{1,3})(?:\/|$)/i)||v.match(/^(n\d{4}[a-z]{1,3})$/i);
+  if(/novel18\.syosetu\.com/i.test(v)){msg('narou-pdf-status','ノクターン・ムーンライト等（novel18）には対応していません');return;}
+  if(!m){msg('narou-pdf-status','なろうの作品URL（https://ncode.syosetu.com/n…/）かNコード（n4402bd など）を入れてください');return;}
+  const code=m[1].toLowerCase();
+  window.open('https://ncode.syosetu.com/novelpdf/creatingpdf/ncode/'+code+'/','_blank','noopener');
+  msg('narou-pdf-status',code+' の縦書きPDFのページを開きました。PDFが表示されたら共有→「"ファイル"に保存」で保存してください。');
+ });
+})();
 })();
