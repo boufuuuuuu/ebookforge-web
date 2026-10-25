@@ -1,4 +1,76 @@
-# EbookForge Web v0.8.1 — iPhoneローカルPDF・RAR/CBR対応（開発版）
+# EbookForge Web v0.8.2 — iPhoneだけで、本・PDF・漫画を XTEINK X3 用 XTC/XTCH に変換（開発版）
+
+ファイルは端末内で処理し、独自のサーバーへは送りません（例外：カクヨム取り込みは、あなた専用の中継サーバーを経由します）。
+
+## 現在の状態（v0.8.2）
+
+### できること
+| 入力 | 出力・機能 |
+|---|---|
+| TXT・Markdown・EPUB・貼り付けた本文 | 縦書き／横書きの XTC。章（目次）・ルビ・傍点・縦中横・書体（明朝／ゴシック）・文字サイズ・余白・行間 |
+| カクヨム・なろうの記法 | ｜漢字《かんじ》・漢字《かんじ》・《《傍点》》。画面からコピーした「漢字（かな）」のルビ（任意） |
+| 小説家になろう | 話のページのコピー＆貼り付け（話の区切り・作品名・作者名を自動整理）、公式の縦書きPDF（話ごとの章・ルビを復元、長編は自動で分冊）。**本文の自動取得はしない**（利用規約 第14条23項） |
+| カクヨム | 作品URLから全話を取り込み（あなた専用の中継サーバーが必要。`kakuyomu-setup.html`） |
+| PDF（一般） | ①画像として（レイアウトそのまま・分割表示）②文字を組み直す（図・写真・表・罫線文字の図・AAは画像で挿入）。図が入らないときの診断 |
+| 画像・ZIP/CBZ・RAR/CBR | 漫画の見開き分割・右開き／左開き・縦長画像の分割・XTC／XTCH・分冊 |
+
+### できないこと
+- OCR（文字のない画像・スキャンPDFは「文字を組み直す」不可。画像として変換は可）
+- パスワード付き・DRM付きPDF、暗号化・分割RAR、HEIC/HEIF画像
+- X3へのWi-Fi直接送信（保存したファイルを手動で転送）
+- 小説家になろうの本文の自動取得（規約で禁止）。カクヨムの取得は中継サーバー経由のみ
+
+### 検証の状況（正直な申告）
+| 項目 | 状態 |
+|---|---|
+| 自動テスト（`npm test`） | 単体テスト14件。なろう縦書きPDFの読み取りは同じ作りの検証用PDF（`tests/fixtures/narou_like.pdf`）で実際の PDF.js を使って検証 |
+| 実際の PDF.js での変換（開発環境の Chromium） | 図の検証用PDF（12ページ・図9枚）、なろう公式の縦書きPDF（実物2227ページ。著作物のため同梱しない）で確認。CrossPoint の読み込み処理で全ページ検証OK |
+| iPhone Safari・X3 実機 | 利用者の実機で、PDF組み直し・図・写真・画面キャプチャ・概念図の表示を確認済み。v0.8.1 の文字のかすれ修正・ルビ・長音は実機で再確認中 |
+| カクヨム取り込み | 擬似ページで検証済み。本物のカクヨムでは**未検証**（開発環境から接続できない） |
+| 長編の分冊 | 実物（なろうPDF）で第1巻571ページを生成・検証。全巻・iPhoneでの処理時間は未確認 |
+| 既知の問題 | 端末への転送直後に「メモリエラー」が出て、再起動後は開ける（端末側のメモリの細切れが原因と推定）。iPhoneで分冊の章選択が1章だけになった報告1件（未再現・調査中） |
+
+## GitHub Pagesを更新する（iPhone）
+
+1. 配布ZIPをiPhoneの「ファイル」に保存し、タップして展開します。
+2. https://github.com/boufuuuuuu/ebookforge-web/upload/main を開きます。
+3. リポジトリ直下にZIP **の中のファイル**をアップロードし、既存ファイルを更新します。
+   - 必須：`index.html`、`app.js`、`epub.js`、`book.js`、`studio.js`、`catalog.js`、`manga.js`、`manga-ui.js`、`document-input.js`、**`kakuyomu.js`**、**`kakuyomu-setup.html`**、**`worker/kakuyomu-relay.js`**（作り方ページがここからコードを読む）、`manifest.webmanifest`
+   - 推奨：`README.md`、`THIRD_PARTY_NOTICES.md`
+   - `tests/`・`package.json` は公開する必要がありません（開発用）。
+4. **Commit changes** を押します。
+5. https://boufuuuuuu.github.io/ebookforge-web/ を開き、画面下の「読み込まれている処理プログラム」で版を確認します。古い版のときは再読み込みしてください。
+
+## テストの実行（開発用）
+
+```
+npm install      # pdfjs-dist 3.11.174（テスト専用。公開ページは CDN の PDF.js を使う）
+npm test         # tests/ をすべて実行して PASS / SKIP / FAIL を集計
+```
+`worker/kakuyomu-relay.js` の制限は `tests/v070_relay.mjs` で、Node だけで検証します。
+
+## 動作の前提
+
+### 初回のネット接続について
+
+**PDF.jsとRAR展開エンジンは該当形式を初めて開く時にCDNから読み込みます。** GitHub PagesのJavaScriptと書籍内容を独自のサーバーに送信する処理はありません。ただし、外部配信のライブラリを実行するため、CDNの信頼・可用性に依存します。オフラインでPDF/RARを変換することは保証できません。CDNがブロックされると変換は失敗します。
+
+- PDF.js 3.11.174 (`pdf.min.js` と `pdf.worker.min.js`, Apache-2.0): https://cdnjs.com/libraries/pdf.js/3.11.174
+- node-unrar-js 2.0.2 (`esm/index.esm.js`、`unrar.wasm`, MIT + underlying UnRAR terms): https://github.com/YuJianrong/node-unrar.js
+- CDN依存ライブラリ本体をZIPへ同梱してはいません。
+
+## 制限の数値
+
+- PDF：一般のPDFは最大35MB・120ページ（画像として）／360ページ（文字を組み直す）。なろう公式の縦書きPDFは最大70MB・8000ページ
+- RAR/CBR：最大40MB、展開後125MB・180画像。ZIP/CBZ：最大70MB
+- 小説の組版：1回の生成は最大900ページ（長編は分冊）
+- X3の1ページ表示に必要な連続メモリ：XTC 52,272バイト、XTCH 104,544バイト
+
+## 第三者ソフトウェア
+
+`THIRD_PARTY_NOTICES.md` を参照してください。MITの公開参考実装・CrossPoint仕様の著作権表示を保持し、PDF.jsとRARエンジンのライセンス情報を追記しています。
+
+## 変更履歴
 
 ## v0.8.1（小説の文字のかすれ・ルビ・長音の修正）
 - 本文を2倍の大きさで描き、2×2画素の平均の濃さで白黒にする（細い明朝の線が白に飛んでかすれる問題を修正）
@@ -172,60 +244,6 @@ GitHub Pages上で動作するXTEINK X3向け電子書籍変換ツールです�
 - **X3純正／CrossPoint切替とX3初期設定**を維持しました。直接Wi-Fi送信は未対応です。
 - **入力保護**：PDFページ数上限、RARの展開サイズ制限、暗号化書庫の拒否、変換後の文書資源解放。
 - 以前のTXT/Markdown/EPUB/ZIP/CBZ/画像、なろう作品情報・青空文庫索引検索、EPUB補正機能を維持しました。
-
-## GitHub Pagesを更新する（iPhone）
-
-1. 配布ZIPをiPhoneの「ファイル」に保存し、タップして展開します。
-2. https://github.com/boufuuuuuu/ebookforge-web/upload/main を開きます。
-3. リポジトリ直下にZIP **の中のファイル**をアップロードし、既存ファイルを更新します。
-   - 必須：`index.html`、`app.js`、`epub.js`、`book.js`、`studio.js`、`catalog.js`、`manga.js`、`manga-ui.js`、**`document-input.js`**、`manifest.webmanifest`
-   - 推奨：`README.md`、`THIRD_PARTY_NOTICES.md`
-   - `.nojekyll` は任意。`tests/` は公開する必要がありません。
-4. **Commit changes** を押します。
-5. https://boufuuuuuu.github.io/ebookforge-web/ を開き、見出しに `v0.5.0` が表示されることを確認します。旧画面の場合は再読み込みしてください。
-
-この成果物はGitHubへ自動アップロードされません。
-
-## PDF・RAR変換手順
-
-1. `⑤ 漫画・写真・PDF・RAR/CBR` までスクロール。
-2. iPhoneの「ファイル」から `.pdf` / `.rar` / `.cbr` を選択。複数ファイルの指定もできます。
-3. 出力をXTCまたはXTCHにし、必要な画質設定を変更。
-4. 「漫画画像を変換してプレビュー」で確認。「X3用ファイルを保存」でダウンロード。
-5. 保存したファイルをX3へ手動転送。CrossPointを導入している場合は端末のFile Transfer機能からアップロード。
-
-### 初回のネット接続について
-
-**PDF.jsとRAR展開エンジンは該当形式を初めて開く時にCDNから読み込みます。** GitHub PagesのJavaScriptと書籍内容を独自のサーバーに送信する処理はありません。ただし、外部配信のライブラリを実行するため、CDNの信頼・可用性に依存します。オフラインでPDF/RARを変換することは保証できません。CDNがブロックされると変換は失敗します。
-
-- PDF.js 3.11.174 (`pdf.min.js` と `pdf.worker.min.js`, Apache-2.0): https://cdnjs.com/libraries/pdf.js/3.11.174
-- node-unrar-js 2.0.2 (`esm/index.esm.js`、`unrar.wasm`, MIT + underlying UnRAR terms): https://github.com/YuJianrong/node-unrar.js
-- CDN依存ライブラリ本体をZIPへ同梱してはいません。
-
-## 制限と注意
-
-- PDF **最大35MB、120ページ**。パスワード付き/DRM付きPDFには対応しません。PDF内の文字はOCRせず画像化します。スキャンPDFは画像として変換可能。
-- RAR/CBR **最大40MB、展開後画像125MB、180画像**。35MBを超える単独画像は拒否。暗号化・分割RAR（マルチボリューム）には未対応。RAR5含む実アーカイブのSafari試験は未完了です。
-- 従来のZIP/CBZ最大70MB、合計ファイル90MB、出力400ページ。HEIC/HEIFは未対応。
-- 画像の自動加工は縦横比・画素判定に基づく簡易処理。吹き出し・コマ・文字の認識、OCRはしません。
-- iPhoneのRAM不足で長編変換が失敗する可能性があります。まず小規模ファイルから試してください。
-- XTEINK X3実機への転送、XTC/XTCH実機表示、端末本体の戻る操作は未検証です。
-- 漫画サイトからの自動ダウンロード・DRM回避は行いません。保存・変換が認められたファイルのみを利用してください。
-
-## 検証結果と実行方法
-
-- `node --check`：すべてのJavaScriptの構文が正常
-- `node tests/smoke.cjs`：旧版の本文→XTC、青空文庫索引、章情報
-- `node tests/manga.cjs`：画像処理、XTC/XTCHパッキング
-- `node tests/documents.cjs`：**PDF/RARの入力アダプターを模擬依存エンジンで検証**
-- Chromiumの画面上で、PDF模擬レンダラ→2ページXTC、RAR模擬展開器→2ページXTCHを生成し、独立したCrossPoint XTC構造バリデータでMD5、章情報、解像度を確認
-
-**検証の限界：** この実行環境では外部CDNに接続できず、実際のPDF.js／RAR WebAssemblyを呼んだエンドツーエンド検証は実施していません。iPhone SafariとX3実機も未検証です。したがってPDF/RARは「実装済み・統合動作未確認」の段階です。
-
-## 第三者ソフトウェア
-
-`THIRD_PARTY_NOTICES.md` を参照してください。MITの公開参考実装・CrossPoint仕様の著作権表示を保持し、PDF.jsとRARエンジンのライセンス情報を追記しています。
-
 
 ### v0.5.2 PDF白紙化対策
 PDF.jsが白紙を返した場合、選択可能な文字があるPDFではテキストを再描画します。再描画も失敗した場合は空白XTCを出力せずエラーにします。文字位置・フォントの再現性は実機未検証です。画像だけのPDFの白紙化は未解決の場合があります。

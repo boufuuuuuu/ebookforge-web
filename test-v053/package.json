@@ -1,0 +1,12 @@
+{
+  "name": "ebookforge-web",
+  "version": "0.8.2",
+  "private": true,
+  "description": "EbookForge Web — ブラウザだけで動く XTEINK X3 向け XTC/XTCH 変換（テスト用の定義。公開ページには不要）",
+  "scripts": {
+    "test": "node tests/run-all.cjs"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "3.11.174"
+  }
+}
